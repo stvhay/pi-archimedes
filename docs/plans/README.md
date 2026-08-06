@@ -19,6 +19,7 @@
 | 14 | [Agents local JSON for model overrides](done/plan-015-agents-local-json.md) | ✅ COMPLETED | 2026-07-27 |
 | 16 | [Subagent agent→model mirror fix + agent discovery](done/plan-016-subagent-model-mirror.md) | ✅ COMPLETED (squash `9ae002a`) | 2026-07-28 |
 | 18 | [Bounded subagent execution](done/2026-08-06-bounded-subagent-execution.md) | ✅ COMPLETED | 2026-08-06 |
+| 19 | [Subagent one-shot mode](done/2026-08-06-subagent-one-shot-mode.md) | ✅ COMPLETED | 2026-08-06 |
 
 > **Notes:**
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -26,6 +27,6 @@
 
 ## Quick Stats
 
-- Total Plans: 17
-- Completed: 17
+- Total Plans: 18
+- Completed: 18
 - In Progress: 0

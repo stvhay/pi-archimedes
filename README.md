@@ -70,6 +70,7 @@ Dispatch work to other agents and watch them work in real time.
 - Parallel execution mode
 - Per-subagent tool counts and token usage
 - Optional request, tool, token, cost, wall-time, and fanout limits
+- Cold one-shot mode for complete read-only packets
 - Unified cost summary
 
 ![subagents main view](docs/images/subagents-main-view.png)
