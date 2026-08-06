@@ -143,6 +143,30 @@ describe("subagent dispatch policy integration", () => {
     expect(executeSubagentMock).not.toHaveBeenCalled();
   });
 
+  it("rejects one-shot work with provider retries even without operator limits", async () => {
+    configState.limits = undefined;
+    const cwd = mkdtempSync(join(tmpdir(), "archimedes-one-shot-retry-"));
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({
+      retry: { provider: { maxRetries: 1 } },
+    }));
+
+    try {
+      const result = await registeredSubagentTool().execute(
+        "id",
+        { task: "one", mode: "one-shot", cwd },
+        undefined,
+        undefined,
+        context(cwd),
+      );
+
+      expect(result.content[0]?.text).toContain("retry.provider.maxRetries");
+      expect(executeSubagentMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("rejects bounded work when project provider retries are nonzero", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "archimedes-retry-policy-"));
     mkdirSync(join(cwd, ".pi"));

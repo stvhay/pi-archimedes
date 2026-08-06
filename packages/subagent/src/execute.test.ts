@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+
+const { spawnSubagentMock, streamEventsMock } = vi.hoisted(() => ({
+  spawnSubagentMock: vi.fn(() => ({})),
+  streamEventsMock: vi.fn(),
+}));
+
+vi.mock("./spawn.js", () => ({ spawnSubagent: spawnSubagentMock }));
+vi.mock("./stream.js", () => ({ streamEvents: streamEventsMock }));
+
 import {
   aggregateUsage,
   applyControlTermination,
   createExecutionControl,
   executeParallel,
+  executeSubagent,
 } from "./execute.js";
 import type { ExecuteOptions } from "./execute.js";
 import type { SubagentResult } from "./types.js";
@@ -103,6 +113,28 @@ describe("aggregateUsage", () => {
       totalTokens: 36,
       cost: { input: 0.04, output: 0.12, cacheRead: 0.02, cacheWrite: 0.02, total: 0.2 },
     });
+  });
+});
+
+describe("executeSubagent", () => {
+  it("enforces immutable one-shot limits for direct callers", async () => {
+    streamEventsMock.mockResolvedValueOnce(result("one-shot", 0));
+
+    await executeSubagent({
+      agent: undefined,
+      agentConfig: undefined,
+      task: "one-shot",
+      model: undefined,
+      activeModel: undefined,
+      cwd: undefined,
+      signal: undefined,
+      onUpdate: undefined,
+      profile: { mode: "one-shot", thinking: undefined },
+    });
+
+    expect(spawnSubagentMock).toHaveBeenCalledWith(expect.objectContaining({
+      limits: { maxProviderRequests: 1, maxDurationMs: 180_000 },
+    }));
   });
 });
 

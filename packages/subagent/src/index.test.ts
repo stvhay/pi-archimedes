@@ -8,6 +8,8 @@ interface SchemaNode {
   minimum?: number;
   maximum?: number;
   exclusiveMinimum?: number;
+  enum?: string[];
+  description?: string;
 }
 
 const limitProperties = (node: SchemaNode | undefined) => node?.properties?.limits?.properties;
@@ -43,6 +45,20 @@ describe("subagent registration", () => {
     }
 
     expect(tools).toEqual([]);
+  });
+});
+
+describe("subagent execution profile schema", () => {
+  it("exposes identical mode and thinking fields on top-level and parallel tasks", () => {
+    const root = registeredSubagentSchema();
+    const task = root.properties?.tasks?.items?.properties;
+
+    expect(root.properties?.mode).toEqual(task?.mode);
+    expect(root.properties?.thinking).toEqual(task?.thinking);
+    expect(root.properties?.mode?.enum).toEqual(["agentic", "one-shot"]);
+    expect(root.properties?.thinking?.enum).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
+    expect(root.properties?.mode?.description).toContain("one provider request");
+    expect(root.properties?.thinking?.description).toContain("Agent frontmatter wins");
   });
 });
 
