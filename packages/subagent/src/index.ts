@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 // execute.js + agent-manager.js lazy-loaded below to keep subagent tool registration fast
@@ -7,12 +7,21 @@ import { discoverAgents, discoverAgentsAll, findAgent, formatAgentList } from ".
 import { validateModel, firstError } from "./model-validation.js";
 import type {
   SubagentDetails,
+  SubagentLimits,
   SubagentProgress,
   SubagentResult,
   SubagentToolResult,
 } from "./types.js";
 
 // ── JSON Schema for tool parameters (TypeBox) ──────────────────────────────
+
+const SubagentLimitsSchema = Type.Object({
+  maxProviderRequests: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum provider requests for this child" })),
+  maxToolCalls: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum tool calls for this child" })),
+  maxTotalTokens: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum input, output, and cache tokens for this child" })),
+  maxCostUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Observed cost ceiling in USD; may overshoot by one response" })),
+  maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum wall time in milliseconds for this child" })),
+});
 
 const TaskItem = Type.Object({
   agent: Type.Optional(Type.String({
@@ -21,9 +30,10 @@ const TaskItem = Type.Object({
   task: Type.String(),
   model: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
+  limits: Type.Optional(SubagentLimitsSchema),
 });
 
-const SUBAGENT_PARAMS_SCHEMA = Type.Object({
+export const SUBAGENT_PARAMS_SCHEMA = Type.Object({
   agent: Type.Optional(Type.String({
     description: "Agent name (optional). If omitted, the subagent runs config-less — parent's current model, all tools, no system-prompt override. Call list_agents to see available agents.",
   })),
@@ -42,6 +52,7 @@ const SUBAGENT_PARAMS_SCHEMA = Type.Object({
   cwd: Type.Optional(Type.String({
     description: "Working directory for the subagent",
   })),
+  limits: Type.Optional(SubagentLimitsSchema),
 });
 
 // ── Theme helper type for render functions ──────────────────────────────────
@@ -66,21 +77,49 @@ export function registerSubagent(pi: ExtensionAPI): void {
       params: {
         agent?: string;
         task?: string;
-        tasks?: Array<{ agent?: string; task: string; count?: number; model?: string; cwd?: string }>;
+        tasks?: Array<{ agent?: string; task: string; count?: number; model?: string; cwd?: string; limits?: SubagentLimits }>;
         model?: string;
         cwd?: string;
         async?: boolean;
+        limits?: SubagentLimits;
       },
       signal: AbortSignal | undefined,
       onUpdate: ((update: SubagentToolResult) => void) | undefined,
       ctx: ExtensionContext,
     ): Promise<SubagentToolResult> {
       // Lazy-load executor (spawn/stream/cost) — only when tool is actually invoked
-      const { executeSubagent, executeParallel } = await import("./execute.js");
+      const { executeSubagent, executeParallel, aggregateUsage } = await import("./execute.js");
+      const {
+        loadSubagentConfig,
+        resolveConfiguredLimits,
+        validateDispatchPolicy,
+      } = await import("./config.js");
+      const { resolveLimits } = await import("./limits.js");
       const agents = discoverAgents(ctx.cwd);
+      let config;
+      let configuredLimits;
+      try {
+        config = loadSubagentConfig();
+        configuredLimits = resolveConfiguredLimits(config);
+      } catch (error) {
+        return policyError(params.tasks?.length ? "parallel" : "single", error);
+      }
 
       // Parallel mode
       if (params.tasks && params.tasks.length > 0) {
+        const taskLimits = params.tasks.map((task) =>
+          resolveLimits(configuredLimits, params.limits, task.limits));
+        try {
+          validateDispatchPolicy(config, params.tasks.length, undefined, 0);
+          params.tasks.forEach((task, index) => {
+            const retries = SettingsManager.create(task.cwd ?? process.cwd())
+              .getProviderRetrySettings().maxRetries ?? 0;
+            validateDispatchPolicy(config, 1, taskLimits[index], retries);
+          });
+        } catch (error) {
+          return policyError("parallel", error);
+        }
+
         // Combined pre-spawn checks for parallel mode: unknown agents + invalid
         // models. If ANY task is invalid, abort the whole batch with a single
         // tool result listing all errors (no tasks spawn).
@@ -118,13 +157,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
           };
         }
         const results: SubagentResult[] = await executeParallel({
-          tasks: params.tasks.map((t) => ({
+          tasks: params.tasks.map((t, index) => ({
             agent: t.agent ?? undefined,
             agentConfig: t.agent ? findAgent(agents, t.agent) : undefined,
             task: t.task,
             model: t.model,
             activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
             cwd: t.cwd ?? undefined,
+            ...(taskLimits[index] ? { limits: taskLimits[index] } : {}),
           })),
           signal: signal ?? undefined,
           onUpdate: (progress: SubagentProgress[]) => {
@@ -150,6 +190,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             // details.progress[i] with details.results[i] in the renderer.
             progress: results.map(r => r.progress) as SubagentProgress[],
           },
+          usage: aggregateUsage(results),
         };
       }
 
@@ -184,6 +225,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
             isError: true,
           };
         }
+        const limits = resolveLimits(configuredLimits, params.limits);
+        try {
+          const retries = SettingsManager.create(params.cwd ?? process.cwd())
+            .getProviderRetrySettings().maxRetries ?? 0;
+          validateDispatchPolicy(config, 1, limits, retries);
+        } catch (error) {
+          return policyError("single", error);
+        }
         const result: SubagentResult = await executeSubagent({
           agent: params.agent ?? undefined,
           agentConfig,
@@ -192,6 +241,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
           cwd: params.cwd ?? undefined,
           signal: signal ?? undefined,
+          ...(limits ? { limits } : {}),
           onUpdate: (progress: SubagentProgress) => {
             onUpdate?.({
               content: [],
@@ -212,6 +262,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             progress: result.progress ? [result.progress] : undefined,
           },
           isError: result.exitCode !== 0,
+          usage: aggregateUsage([result]),
         };
       }
 
@@ -280,6 +331,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function policyError(mode: "single" | "parallel", error: unknown): SubagentToolResult {
+  return {
+    content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+    details: { mode, results: [], progress: undefined },
+    isError: true,
+  };
+}
 
 export function registerListAgentsTool(pi: ExtensionAPI): void {
   pi.registerTool({

@@ -67,6 +67,22 @@ export {
   type NotifyConfig,
 } from "@pi-archimedes/notify";
 
+// ── Re-export subagent config ──────────────────────────────────────────
+
+import {
+  loadSubagentConfig,
+  loadSubagentConfigOrDefault,
+  saveSubagentConfig,
+  DEFAULT_SUBAGENT_CONFIG,
+  type SubagentConfig,
+} from "@pi-archimedes/subagent/config";
+export {
+  loadSubagentConfig,
+  saveSubagentConfig,
+  DEFAULT_SUBAGENT_CONFIG,
+  type SubagentConfig,
+} from "@pi-archimedes/subagent/config";
+
 // ── Composed config loader ─────────────────────────────────────────────
 
 export function loadAllConfig(): {
@@ -74,11 +90,13 @@ export function loadAllConfig(): {
   footer: FooterConfig;
   diff: DiffConfig;
   notify: NotifyConfig;
+  subagent: SubagentConfig;
 } {
   return {
     core: loadCoreConfig(),
     footer: loadFooterConfig(),
     diff: loadDiffConfig(),
     notify: loadNotifyConfig(),
+    subagent: loadSubagentConfigOrDefault(),
   };
 }
