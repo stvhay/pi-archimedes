@@ -43,6 +43,32 @@ function assistantEvent(type: "message_update" | "message_end", text: string, in
   };
 }
 
+describe("streamEvents session identity", () => {
+  it("returns the logical child Pi session ID", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    child.stdout.write(`${JSON.stringify({
+      type: "session",
+      id: "00000000-0000-7000-8000-000000000003",
+    })}\n`);
+    child.emit("close", 0, null);
+
+    expect((await pending).childSessionId).toBe("00000000-0000-7000-8000-000000000003");
+  });
+
+  it("omits the child session ID when no valid session event arrives", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    child.stdout.write(`${JSON.stringify({ type: "session" })}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "session", id: 42 })}\n`);
+    child.emit("close", 0, null);
+
+    expect((await pending).childSessionId).toBeUndefined();
+  });
+});
+
 describe("streamEvents bounded termination", () => {
   it("preserves in-flight output and usage when a child limit marker arrives", async () => {
     const child = fakeChild();

@@ -21,6 +21,8 @@ export interface StreamCallbacks {
   onProgress?: (progress: SubagentProgress) => void;
 }
 
+type ChildJsonEvent = JsonEvent | { type: "session"; id?: unknown };
+
 /**
  * Stream JSON events from a child `pi --mode json` process and build progress/result.
  *
@@ -140,9 +142,9 @@ export function streamEvents(
       const trimmed = line.trim();
       if (!trimmed) return;
 
-      let event: JsonEvent;
+      let event: ChildJsonEvent;
       try {
-        event = JSON.parse(trimmed) as JsonEvent;
+        event = JSON.parse(trimmed) as ChildJsonEvent;
       } catch {
         // Non-JSON output — ignore (can happen from pi startup messages)
         return;
@@ -152,6 +154,10 @@ export function streamEvents(
       clearStartupTimer();
 
       switch (event.type) {
+        case "session": {
+          if (typeof event.id === "string" && event.id) state.childSessionId = event.id;
+          break;
+        }
         case "tool_execution_start": {
           handleToolStart(state, event);
           emitProgress();
@@ -193,7 +199,7 @@ export function streamEvents(
           handleAgentEnd(state, event);
           break;
         }
-        // Ignore: session, agent_start, message_start, turn_end, tool_execution_update
+        // Ignore: agent_start, message_start, turn_end, tool_execution_update
       }
     });
 
@@ -219,6 +225,7 @@ export function streamEvents(
       const result: SubagentResult = {
         agent: callbacks.agent ?? "subagent",
         task: callbacks.task ?? "",
+        ...(state.childSessionId ? { childSessionId: state.childSessionId } : {}),
         exitCode,
         model: state.model,
         usage: toSubagentUsage(usage, state.turnCount),

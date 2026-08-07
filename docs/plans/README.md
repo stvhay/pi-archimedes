@@ -18,6 +18,7 @@
 | 13 | [Lazy-load and profile startup](done/plan-014-lazy-load-and-profiling.md) | ✅ COMPLETED (PR #21) | 2026-07-20 |
 | 14 | [Agents local JSON for model overrides](done/plan-015-agents-local-json.md) | ✅ COMPLETED | 2026-07-27 |
 | 16 | [Subagent agent→model mirror fix + agent discovery](done/plan-016-subagent-model-mirror.md) | ✅ COMPLETED (squash `9ae002a`) | 2026-07-28 |
+| 17 | [Expose child Pi session ID](done/2026-08-05-subagent-session-id.md) | ✅ COMPLETED | 2026-08-05 |
 | 18 | [Bounded subagent execution](done/2026-08-06-bounded-subagent-execution.md) | ✅ COMPLETED | 2026-08-06 |
 | 19 | [Subagent one-shot mode](done/2026-08-06-subagent-one-shot-mode.md) | ✅ COMPLETED | 2026-08-06 |
 
@@ -27,6 +28,6 @@
 
 ## Quick Stats
 
-- Total Plans: 18
-- Completed: 18
+- Total Plans: 19
+- Completed: 19
 - In Progress: 0
