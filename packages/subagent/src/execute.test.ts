@@ -117,7 +117,7 @@ describe("aggregateUsage", () => {
 });
 
 describe("executeSubagent", () => {
-  it("enforces immutable one-shot limits for direct callers", async () => {
+  it("enforces the immutable one-shot request limit for direct callers", async () => {
     streamEventsMock.mockResolvedValueOnce(result("one-shot", 0));
 
     await executeSubagent({
@@ -133,7 +133,7 @@ describe("executeSubagent", () => {
     });
 
     expect(spawnSubagentMock).toHaveBeenCalledWith(expect.objectContaining({
-      limits: { maxProviderRequests: 1, maxDurationMs: 180_000 },
+      limits: { maxProviderRequests: 1 },
     }));
   });
 });

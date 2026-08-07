@@ -187,7 +187,6 @@ export function buildSubagentArgs(
       "--no-extensions",
       "--no-skills",
       "--no-context-files",
-      "--no-prompt-templates",
     );
   } else if (options.agent?.tools && options.agent.tools.length > 0) {
     args.push("--tools", options.agent.tools.join(","));
@@ -197,7 +196,7 @@ export function buildSubagentArgs(
     (mode === "one-shot" ? ONE_SHOT_SYSTEM_PROMPT : undefined);
   if (systemPrompt) args.push("--system-prompt", systemPrompt);
 
-  // One-shot always has immutable request/time limits; unlimited agentic runs
+  // One-shot always has an immutable request limit; unlimited agentic runs
   // keep their existing process shape without loading a no-op guard.
   if (options.limits || mode === "one-shot") args.push("--extension", childGuardPath);
   args.push(options.task);

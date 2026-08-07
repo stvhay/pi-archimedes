@@ -33,14 +33,14 @@ describe("resolveExecutionProfile", () => {
 });
 
 describe("resolveChildExecution", () => {
-  it("composes immutable one-shot limits with stricter caller limits", () => {
+  it("composes the one-shot request cap with explicit caller limits", () => {
     expect(resolveChildExecution({
       topLevelMode: "one-shot",
-      operatorLimits: { maxDurationMs: 120_000 },
+      operatorLimits: { maxDurationMs: 300_000 },
       topLevelLimits: { maxProviderRequests: 4, maxDurationMs: 240_000 },
     })).toEqual({
       profile: { mode: "one-shot", thinking: undefined },
-      limits: { maxProviderRequests: 1, maxDurationMs: 120_000 },
+      limits: { maxProviderRequests: 1, maxDurationMs: 240_000 },
     });
   });
 
@@ -62,8 +62,8 @@ describe("resolveChildExecution", () => {
 });
 
 describe("one-shot defaults", () => {
-  it("enforces one provider request and a 180-second deadline", () => {
-    expect(ONE_SHOT_LIMITS).toEqual({ maxProviderRequests: 1, maxDurationMs: 180_000 });
+  it("enforces one provider request without adding a wall-time limit", () => {
+    expect(ONE_SHOT_LIMITS).toEqual({ maxProviderRequests: 1 });
     expect(resolveLimits(
       { maxDurationMs: 120_000 },
       { maxProviderRequests: 4, maxDurationMs: 240_000 },

@@ -25,7 +25,7 @@ const SubagentLimitsSchema = Type.Object({
 });
 
 const ExecutionModeSchema = StringEnum(["agentic", "one-shot"] as const, {
-  description: "agentic: normal child with tools and ambient context; one-shot: isolated packet with one provider request and a 180-second deadline",
+  description: "agentic: normal child with tools and ambient context; one-shot: isolated packet with one provider request",
 });
 const ThinkingLevelSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
   description: "Child thinking level. Agent frontmatter wins, then task-level, then top-level thinking.",

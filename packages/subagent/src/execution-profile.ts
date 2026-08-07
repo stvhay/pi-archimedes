@@ -8,7 +8,6 @@ import type {
 
 export const ONE_SHOT_LIMITS = {
   maxProviderRequests: 1,
-  maxDurationMs: 180_000,
 } as const satisfies SubagentLimits;
 
 export const ONE_SHOT_SYSTEM_PROMPT =

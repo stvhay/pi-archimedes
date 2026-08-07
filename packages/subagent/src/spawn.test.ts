@@ -63,7 +63,6 @@ describe("bounded spawn", () => {
       "--no-extensions",
       "--no-skills",
       "--no-context-files",
-      "--no-prompt-templates",
       "--system-prompt", "Agent review prompt",
       "--extension", "/package/src/child-guard.ts",
       "review this",
