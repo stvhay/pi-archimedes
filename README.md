@@ -68,7 +68,7 @@ Dispatch work to other agents and watch them work in real time.
 
 - Sub-agent dispatch with live TUI streaming
 - Parallel execution mode
-- Per-subagent tool counts and token usage
+- Per-subagent tool counts and current-turn/cumulative token usage
 - Optional request, tool, token, cost, wall-time, and fanout limits
 - Cold one-shot mode for complete read-only packets
 - Unified cost summary
