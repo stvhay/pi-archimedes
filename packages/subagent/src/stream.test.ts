@@ -25,6 +25,8 @@ function assistantEvent(type: "message_update" | "message_end", text: string, in
     type,
     message: {
       role: "assistant",
+      api: "openai-completions",
+      provider: "test-provider",
       model: "test-model",
       content: [{ type: "text", text }],
       usage: {
@@ -32,8 +34,11 @@ function assistantEvent(type: "message_update" | "message_end", text: string, in
         output,
         cacheRead: 1,
         cacheWrite: 0,
+        totalTokens: input + output + 1,
         cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0, total: 0.031 },
       },
+      stopReason: "stop",
+      timestamp: 1,
     },
   };
 }

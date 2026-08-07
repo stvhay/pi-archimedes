@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { addUsage, fromSubagentUsage, readUsage, toSubagentUsage } from "./usage.js";
+import { addUsage, fromSubagentUsage, isUsage, readUsage, toSubagentUsage } from "./usage.js";
 
 describe("usage normalization", () => {
+  it("distinguishes complete canonical usage from malformed input", () => {
+    expect(isUsage(readUsage(undefined))).toBe(true);
+    expect(isUsage({ ...readUsage(undefined), input: "bad" })).toBe(false);
+    expect(isUsage({ input: 0, output: 0 })).toBe(false);
+  });
+
   it("normalizes one untrusted Pi usage object", () => {
     expect(readUsage({
       input: 4,

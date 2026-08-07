@@ -1,8 +1,32 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { SubagentUsage } from "./types.js";
 
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function number(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  return isNonNegativeFiniteNumber(value) ? value : 0;
+}
+
+export function isUsage(value: unknown): value is Usage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  const cost = source.cost;
+  if (!cost || typeof cost !== "object" || Array.isArray(cost)) return false;
+  const costRecord = cost as Record<string, unknown>;
+  return [
+    source.input,
+    source.output,
+    source.cacheRead,
+    source.cacheWrite,
+    source.totalTokens,
+    costRecord.input,
+    costRecord.output,
+    costRecord.cacheRead,
+    costRecord.cacheWrite,
+    costRecord.total,
+  ].every(isNonNegativeFiniteNumber);
 }
 
 export function readUsage(value: unknown): Usage {

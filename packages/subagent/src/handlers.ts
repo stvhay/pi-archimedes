@@ -1,6 +1,6 @@
 import type { ExtensionEvent } from "@earendil-works/pi-coding-agent";
 import type { StreamState } from "./types.js";
-import { addUsage, readUsage } from "./usage.js";
+import { addUsage, isUsage, readUsage } from "./usage.js";
 
 export type JsonEvent = ExtensionEvent;
 type ToolStartEvent = Extract<ExtensionEvent, { type: "tool_execution_start" }>;
@@ -111,8 +111,29 @@ function objectItems<T>(value: unknown): T[] {
   return value.filter((item) => item !== null && typeof item === "object") as T[];
 }
 
+type AssistantContentPart = AssistantMessage["content"][number];
+
+function isAssistantContentPart(value: unknown): value is AssistantContentPart {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const part = value as Record<string, unknown>;
+  if (part.type === "text") return typeof part.text === "string";
+  if (part.type === "thinking") return typeof part.thinking === "string";
+  return part.type === "toolCall" &&
+    typeof part.id === "string" &&
+    typeof part.name === "string" &&
+    Boolean(part.arguments) &&
+    typeof part.arguments === "object" &&
+    !Array.isArray(part.arguments);
+}
+
 function assistantContent(message: AssistantMessage): AssistantMessage["content"] {
-  return objectItems<AssistantMessage["content"][number]>(message.content);
+  return Array.isArray(message.content) ? message.content.filter(isAssistantContentPart) : [];
+}
+
+function hasAssistantStreamData(message: AssistantMessage): boolean {
+  return Array.isArray(message.content) &&
+    message.content.every(isAssistantContentPart) &&
+    isUsage(message.usage);
 }
 
 function assistantText(message: AssistantMessage): string | undefined {
@@ -134,7 +155,12 @@ function clearPartialUsage(state: StreamState): void {
 /** Handle the latest in-flight assistant message as replaceable partial state. */
 export function handleMessageUpdate(state: StreamState, event: MessageUpdateEvent): void {
   const message = event.message;
-  if (!message || typeof message !== "object" || message.role !== "assistant") return;
+  if (
+    !message ||
+    typeof message !== "object" ||
+    message.role !== "assistant" ||
+    !hasAssistantStreamData(message)
+  ) return;
   if (!state.model && message.model) state.model = message.model;
   state.streamingOutput = assistantText(message);
   state.partialUsage = readUsage(message.usage);
@@ -145,7 +171,12 @@ export function handleMessageUpdate(state: StreamState, event: MessageUpdateEven
  */
 export function handleMessageEnd(state: StreamState, event: MessageEndEvent): void {
   const message = event.message;
-  if (!message || typeof message !== "object" || message.role !== "assistant") return;
+  if (
+    !message ||
+    typeof message !== "object" ||
+    message.role !== "assistant" ||
+    !hasAssistantStreamData(message)
+  ) return;
 
   // Finalized data replaces the latest partial message.
   state.streamingOutput = undefined;

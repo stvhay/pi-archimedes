@@ -76,7 +76,7 @@ describe("assistant event handling", () => {
     expect(state.finalOutput).toBe("final answer");
   });
 
-  it("ignores malformed completed assistant parts from the child event stream", () => {
+  it("rejects a completed assistant event containing malformed parts", () => {
     const state = streamState();
     const event = {
       type: "message_end",
@@ -87,24 +87,32 @@ describe("assistant event handling", () => {
           { type: "text", text: 42 },
           { type: "text", text: "completed answer" },
         ],
+        usage: readUsage(undefined),
       },
     } as unknown as Parameters<typeof handleMessageEnd>[1];
 
     handleMessageEnd(state, event);
 
-    expect(state.accumulatedOutput).toEqual(["completed answer"]);
+    expect(state.accumulatedOutput).toEqual([]);
   });
 
-  it("ignores a malformed in-flight assistant message", () => {
+  it("preserves in-flight state for a malformed assistant update", () => {
     const state = streamState();
+    state.streamingOutput = "partial answer";
+    state.partialUsage = readUsage({ input: 4, output: 2, cacheRead: 0, cacheWrite: 0 });
     const event = {
       type: "message_update",
-      message: null,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: 42 }],
+        usage: readUsage(undefined),
+      },
     } as unknown as Parameters<typeof handleMessageUpdate>[1];
 
     handleMessageUpdate(state, event);
 
-    expect(state.streamingOutput).toBeUndefined();
+    expect(state.streamingOutput).toBe("partial answer");
+    expect(state.partialUsage.totalTokens).toBe(6);
   });
 
   it("ignores a malformed completed assistant message", () => {
@@ -119,16 +127,38 @@ describe("assistant event handling", () => {
     expect(state.accumulatedOutput).toEqual([]);
   });
 
-  it("ignores a malformed completed assistant content collection", () => {
+  it("preserves in-flight state for malformed completed assistant content", () => {
     const state = streamState();
+    state.streamingOutput = "partial answer";
+    state.partialUsage = readUsage({ input: 4, output: 2, cacheRead: 0, cacheWrite: 0 });
     const event = {
       type: "message_end",
-      message: { role: "assistant", content: null },
+      message: { role: "assistant", content: null, usage: null },
     } as unknown as Parameters<typeof handleMessageEnd>[1];
 
     handleMessageEnd(state, event);
 
-    expect(state.accumulatedOutput).toEqual([]);
+    expect(state.streamingOutput).toBe("partial answer");
+    expect(state.partialUsage.totalTokens).toBe(6);
+  });
+
+  it("preserves in-flight state for malformed completed assistant usage", () => {
+    const state = streamState();
+    state.streamingOutput = "partial answer";
+    state.partialUsage = readUsage({ input: 4, output: 2, cacheRead: 0, cacheWrite: 0 });
+    const event = {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "completed answer" }],
+        usage: { ...readUsage(undefined), input: "bad" },
+      },
+    } as unknown as Parameters<typeof handleMessageEnd>[1];
+
+    handleMessageEnd(state, event);
+
+    expect(state.streamingOutput).toBe("partial answer");
+    expect(state.partialUsage.totalTokens).toBe(6);
   });
 
   it("ignores a malformed final message collection", () => {
