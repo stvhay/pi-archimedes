@@ -3,6 +3,7 @@ import {
   extractArgsPreview,
   handleAgentEnd,
   handleMessageEnd,
+  handleMessageStart,
   handleMessageUpdate,
 } from "./handlers.js";
 import { readUsage } from "./usage.js";
@@ -51,6 +52,7 @@ function streamState(): StreamState {
     model: undefined,
     accumulatedOutput: [],
     streamingOutput: undefined,
+    streamingParts: new Map(),
     recentOutput: [],
     toolCalls: [],
     finalOutput: undefined,
@@ -58,6 +60,94 @@ function streamState(): StreamState {
 }
 
 describe("assistant event handling", () => {
+  it("assembles Pi 0.84 text and thinking deltas by content index", () => {
+    const state = streamState();
+
+    for (const assistantMessageEvent of [
+      { type: "thinking_start", contentIndex: 0 },
+      { type: "thinking_delta", contentIndex: 0, delta: "check " },
+      { type: "thinking_delta", contentIndex: 0, delta: "facts" },
+      { type: "text_start", contentIndex: 1 },
+      { type: "text_delta", contentIndex: 1, delta: "final " },
+      { type: "text_end", contentIndex: 1, content: "final answer" },
+    ]) {
+      handleMessageUpdate(state, {
+        type: "message_update",
+        assistantMessageEvent,
+      } as Parameters<typeof handleMessageUpdate>[1]);
+    }
+
+    expect(state.streamingOutput).toBe("[thinking] check facts\n\nfinal answer");
+    expect(state.partialUsage.totalTokens).toBe(0);
+  });
+
+  it("captures the model from a Pi 0.84 assistant message start", () => {
+    const state = streamState();
+
+    handleMessageStart(state, {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "test-provider",
+        model: "live-model",
+        content: [],
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    } as Parameters<typeof handleMessageStart>[1]);
+
+    expect(state.model).toBe("live-model");
+  });
+
+  it("does not expose an empty thinking block before its first delta", () => {
+    const state = streamState();
+
+    handleMessageUpdate(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+    } as Parameters<typeof handleMessageUpdate>[1]);
+
+    expect(state.streamingOutput).toBeUndefined();
+  });
+
+  it("replaces Pi 0.84 deltas with authoritative finalized output and usage", () => {
+    const state = streamState();
+    handleMessageUpdate(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "partial" },
+    } as Parameters<typeof handleMessageUpdate>[1]);
+
+    handleMessageEnd(state, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "final" }],
+        usage: {
+          input: 4,
+          output: 2,
+          cacheRead: 1,
+          cacheWrite: 0,
+          totalTokens: 7,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    } as unknown as Parameters<typeof handleMessageEnd>[1]);
+
+    expect(state.streamingOutput).toBeUndefined();
+    expect(state.streamingParts.size).toBe(0);
+    expect(state.accumulatedOutput).toEqual(["final"]);
+    expect(state.usage.totalTokens).toBe(7);
+  });
+
   it("ignores malformed final assistant parts from the child event stream", () => {
     const state = streamState();
     const event = {

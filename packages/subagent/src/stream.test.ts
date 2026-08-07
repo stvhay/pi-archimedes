@@ -43,6 +43,18 @@ function assistantEvent(type: "message_update" | "message_end", text: string, in
   };
 }
 
+function assistantDelta(type: string, contentIndex: number, value?: string) {
+  return {
+    type: "message_update",
+    assistantMessageEvent: {
+      type,
+      contentIndex,
+      ...(type.endsWith("_delta") ? { delta: value } : {}),
+      ...(type.endsWith("_end") ? { content: value } : {}),
+    },
+  };
+}
+
 function writeEvent(child: FakeChild, event: Record<string, unknown>): void {
   child.stdout.write(`${JSON.stringify(event)}\n`);
 }
@@ -132,6 +144,43 @@ describe("streamEvents bounded termination", () => {
       usageState: "partial",
     });
     expect(result.error).toBe("Subagent stopped: time-limit");
+  });
+
+  it("preserves Pi 0.84 delta output without inventing partial usage", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    writeEvent(child, { type: "turn_start" });
+    writeEvent(child, assistantEvent("message_end", "first", 4, 2));
+    writeEvent(child, { type: "turn_start" });
+    writeEvent(child, { type: "message_start", message: { role: "assistant", content: [] } });
+    writeEvent(child, assistantDelta("thinking_start", 0));
+    writeEvent(child, assistantDelta("thinking_delta", 0, "checking"));
+    writeEvent(child, assistantDelta("text_start", 1));
+    writeEvent(child, assistantDelta("text_delta", 1, "second partial"));
+    child.emit("close", 1, null);
+
+    const result = await pending;
+    expect(result.finalOutput).toBe("first\n\n[thinking] checking\n\nsecond partial");
+    expect(result.usage).toMatchObject({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0 });
+    expect(result.progress).toMatchObject({ turnCount: 2, turnTokens: 0, tokens: 7 });
+    expect(result.termination).toMatchObject({ reason: "process-error", usageState: "partial" });
+  });
+
+  it("replaces Pi 0.84 deltas with finalized output and usage once", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    writeEvent(child, { type: "turn_start" });
+    writeEvent(child, { type: "message_start", message: { role: "assistant", content: [] } });
+    writeEvent(child, assistantDelta("text_delta", 0, "partial"));
+    writeEvent(child, assistantEvent("message_end", "final", 4, 2));
+    child.emit("close", 0, null);
+
+    const result = await pending;
+    expect(result.finalOutput).toBe("final");
+    expect(result.usage).toMatchObject({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0 });
+    expect(result.progress).toMatchObject({ turnCount: 1, turnTokens: 7, tokens: 7 });
   });
 
   it("combines finalized output with the latest in-flight message without double counting", async () => {

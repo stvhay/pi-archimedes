@@ -2,10 +2,15 @@ import type { ExtensionEvent } from "@earendil-works/pi-coding-agent";
 import type { StreamState } from "./types.js";
 import { addUsage, isUsage, readUsage } from "./usage.js";
 
-export type JsonEvent = ExtensionEvent;
+export type MessageUpdateEvent = {
+  type: "message_update";
+  message?: unknown;
+  assistantMessageEvent?: unknown;
+};
+export type JsonEvent = Exclude<ExtensionEvent, { type: "message_update" }> | MessageUpdateEvent;
 type ToolStartEvent = Extract<ExtensionEvent, { type: "tool_execution_start" }>;
 type ToolEndEvent = Extract<ExtensionEvent, { type: "tool_execution_end" }>;
-type MessageUpdateEvent = Extract<ExtensionEvent, { type: "message_update" }>;
+type MessageStartEvent = Extract<ExtensionEvent, { type: "message_start" }>;
 type MessageEndEvent = Extract<ExtensionEvent, { type: "message_end" }>;
 type AgentEndEvent = Extract<ExtensionEvent, { type: "agent_end" }>;
 type AssistantMessage = Extract<MessageEndEvent["message"], { role: "assistant" }>;
@@ -14,6 +19,7 @@ type AssistantMessage = Extract<MessageEndEvent["message"], { role: "assistant" 
 const ARGS_PREVIEW_MAX = 120;
 const TOOL_CALLS_MAX = 50;
 const RECENT_OUTPUT_MAX = 50;
+const STREAMING_PARTS_MAX = 50;
 
 /**
  * Extract a short args preview from tool arguments.
@@ -152,18 +158,75 @@ function clearPartialUsage(state: StreamState): void {
   state.partialUsage = readUsage(undefined);
 }
 
+function clearStreamingMessage(state: StreamState): void {
+  state.streamingOutput = undefined;
+  state.streamingParts.clear();
+}
+
+function renderStreamingParts(state: StreamState): string | undefined {
+  const parts = [...state.streamingParts.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, part]) => part)
+    .filter((part) => part.content.trim())
+    .map((part) => part.type === "thinking" ? `[thinking] ${part.content.trim()}` : part.content);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function updateStreamingPart(
+  state: StreamState,
+  index: number,
+  type: "text" | "thinking",
+  content: string,
+  replace: boolean,
+): void {
+  const existing = state.streamingParts.get(index);
+  if (!existing && state.streamingParts.size >= STREAMING_PARTS_MAX) return;
+  state.streamingParts.set(index, {
+    type,
+    content: replace ? content : `${existing?.type === type ? existing.content : ""}${content}`,
+  });
+  state.streamingOutput = renderStreamingParts(state);
+}
+
+/** Reset replaceable assistant state when a new assistant message starts. */
+export function handleMessageStart(state: StreamState, event: MessageStartEvent): void {
+  if (event.message?.role !== "assistant") return;
+  clearStreamingMessage(state);
+  if (!state.model && event.message.model) state.model = event.message.model;
+}
+
 /** Handle the latest in-flight assistant message as replaceable partial state. */
 export function handleMessageUpdate(state: StreamState, event: MessageUpdateEvent): void {
   const message = event.message;
-  if (
-    !message ||
-    typeof message !== "object" ||
-    message.role !== "assistant" ||
-    !hasAssistantStreamData(message)
-  ) return;
-  if (!state.model && message.model) state.model = message.model;
-  state.streamingOutput = assistantText(message);
-  state.partialUsage = readUsage(message.usage);
+  if (message && typeof message === "object" && (message as { role?: unknown }).role === "assistant") {
+    const assistant = message as AssistantMessage;
+    if (!hasAssistantStreamData(assistant)) return;
+    if (!state.model && assistant.model) state.model = assistant.model;
+    state.streamingParts.clear();
+    state.streamingOutput = assistantText(assistant);
+    state.partialUsage = readUsage(assistant.usage);
+    return;
+  }
+
+  const update = event.assistantMessageEvent;
+  if (!update || typeof update !== "object" || Array.isArray(update)) return;
+  const delta = update as Record<string, unknown>;
+  const index = delta.contentIndex;
+  if (!Number.isSafeInteger(index) || (index as number) < 0) return;
+
+  const eventType = delta.type;
+  const type = typeof eventType === "string" && eventType.startsWith("thinking_") ? "thinking"
+    : typeof eventType === "string" && eventType.startsWith("text_") ? "text"
+    : undefined;
+  if (!type || typeof eventType !== "string") return;
+
+  if (eventType.endsWith("_start")) {
+    updateStreamingPart(state, index as number, type, "", true);
+  } else if (eventType.endsWith("_delta") && typeof delta.delta === "string") {
+    updateStreamingPart(state, index as number, type, delta.delta, false);
+  } else if (eventType.endsWith("_end") && typeof delta.content === "string") {
+    updateStreamingPart(state, index as number, type, delta.content, true);
+  }
 }
 
 /**
@@ -179,7 +242,7 @@ export function handleMessageEnd(state: StreamState, event: MessageEndEvent): vo
   ) return;
 
   // Finalized data replaces the latest partial message.
-  state.streamingOutput = undefined;
+  clearStreamingMessage(state);
   clearPartialUsage(state);
 
   // Capture model name

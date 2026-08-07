@@ -11,6 +11,7 @@ import {
   handleToolStart,
   handleToolEnd,
   handleToolResult,
+  handleMessageStart,
   handleMessageUpdate,
   handleMessageEnd,
   handleAgentEnd,
@@ -109,6 +110,7 @@ export function streamEvents(
       model: undefined,
       accumulatedOutput: [],
       streamingOutput: undefined,
+      streamingParts: new Map(),
       recentOutput: [],
       toolCalls: [],
       finalOutput: undefined,
@@ -331,6 +333,11 @@ export function streamEvents(
           state.partialUsage = readUsage(undefined);
           break;
         }
+        case "message_start": {
+          handleMessageStart(state, event);
+          emitProgress();
+          break;
+        }
         case "message_update": {
           handleMessageUpdate(state, event);
           emitProgress();
@@ -345,7 +352,7 @@ export function streamEvents(
           handleAgentEnd(state, event);
           break;
         }
-        // Ignore: agent_start, message_start, turn_end, tool_execution_update
+        // Ignore: agent_start, turn_end, tool_execution_update
       }
     });
 

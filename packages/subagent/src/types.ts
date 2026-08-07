@@ -140,6 +140,7 @@ export interface StreamState {
   model: string | undefined;
   accumulatedOutput: string[];
   streamingOutput: string | undefined;
+  streamingParts: Map<number, { type: "text" | "thinking"; content: string }>;
   recentOutput: string[];
   toolCalls: string[];
   finalOutput: string | undefined;
