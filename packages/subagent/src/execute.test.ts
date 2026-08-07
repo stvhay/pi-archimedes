@@ -129,7 +129,7 @@ describe("executeSubagent", () => {
       profile: { mode: "one-shot" as const, thinking: undefined },
       limits: { maxProviderRequests: 1 },
     };
-    await executeSubagent({
+    const executed = await executeSubagent({
       agent: undefined,
       agentConfig: undefined,
       task: "one-shot",
@@ -142,6 +142,7 @@ describe("executeSubagent", () => {
     });
 
     expect(spawnSubagentMock).toHaveBeenCalledWith(expect.objectContaining({ execution }));
+    expect(executed.execution).toEqual(execution);
   });
 });
 

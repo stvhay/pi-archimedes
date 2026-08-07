@@ -181,6 +181,7 @@ describe("streamEvents bounded termination", () => {
     expect(result.finalOutput).toBe("final");
     expect(result.usage).toMatchObject({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0 });
     expect(result.progress).toMatchObject({ turnCount: 1, turnTokens: 7, tokens: 7 });
+    expect(result.provider).toBe("test-provider");
   });
 
   it("combines finalized output with the latest in-flight message without double counting", async () => {

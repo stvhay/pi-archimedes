@@ -42,6 +42,13 @@ export interface ExecuteOptions {
 
 export type ParallelTask = Omit<ExecuteOptions, "signal" | "onUpdate">;
 
+function executionEvidence(execution: ResolvedChildExecution): ResolvedChildExecution {
+  return {
+    profile: { ...execution.profile },
+    limits: execution.limits ? { ...execution.limits } : undefined,
+  };
+}
+
 export interface ParallelExecuteOptions {
   tasks: ParallelTask[];
   signal: AbortSignal | undefined;
@@ -151,6 +158,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       ...result,
       agent: agentName,
       task: options.task,
+      execution: executionEvidence(options.execution),
       progress: result.progress
         ? { ...result.progress, agent: agentName, durationMs }
         : // Defensive: streamEvents should always return a progress, but if not,
@@ -196,6 +204,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
         turns: 0,
       } as SubagentUsage,
       model: undefined,
+      execution: executionEvidence(options.execution),
       finalOutput: undefined,
       error: errorMessage,
       termination: { reason: "process-error", usageState: "unknown" },

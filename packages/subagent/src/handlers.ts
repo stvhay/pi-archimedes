@@ -199,6 +199,7 @@ function updateStreamingPart(
 export function handleMessageStart(state: StreamState, event: MessageStartEvent): void {
   if (event.message?.role !== "assistant") return;
   clearStreamingMessage(state);
+  if (!state.provider && event.message.provider) state.provider = event.message.provider;
   if (!state.model && event.message.model) state.model = event.message.model;
 }
 
@@ -208,6 +209,7 @@ export function handleMessageUpdate(state: StreamState, event: MessageUpdateEven
   if (message && typeof message === "object" && (message as { role?: unknown }).role === "assistant") {
     const assistant = message as AssistantMessage;
     if (!hasAssistantStreamData(assistant)) return false;
+    if (!state.provider && assistant.provider) state.provider = assistant.provider;
     if (!state.model && assistant.model) state.model = assistant.model;
     state.streamingParts.clear();
     state.streamingOutput = assistantText(assistant)?.slice(0, STREAMING_OUTPUT_MAX_CHARS);
@@ -255,7 +257,8 @@ export function handleMessageEnd(state: StreamState, event: MessageEndEvent): vo
   clearStreamingMessage(state);
   clearPartialUsage(state);
 
-  // Capture model name
+  // Capture provider/model identity
+  if (!state.provider && message.provider) state.provider = message.provider;
   if (!state.model && message.model) {
     state.model = message.model;
   }

@@ -49,6 +49,7 @@ function streamState(): StreamState {
     currentTool: undefined,
     currentToolArgs: undefined,
     currentToolStartedAt: undefined,
+    provider: undefined,
     model: undefined,
     accumulatedOutput: [],
     streamingOutput: undefined,
@@ -124,6 +125,7 @@ describe("assistant event handling", () => {
       },
     } as Parameters<typeof handleMessageStart>[1]);
 
+    expect(state.provider).toBe("test-provider");
     expect(state.model).toBe("live-model");
   });
 

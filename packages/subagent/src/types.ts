@@ -104,7 +104,10 @@ export interface SubagentResult {
   childSessionId?: string;
   exitCode: number;
   usage: SubagentUsage;
+  provider?: string | undefined;
   model: string | undefined;
+  /** Effective child profile and limits after operator/call resolution. */
+  execution?: ResolvedChildExecution;
   finalOutput: string | undefined;
   error: string | undefined;
   termination?: SubagentTermination;
@@ -137,6 +140,7 @@ export interface StreamState {
   currentTool: string | undefined;
   currentToolArgs: string | undefined;
   currentToolStartedAt: number | undefined;
+  provider: string | undefined;
   model: string | undefined;
   accumulatedOutput: string[];
   streamingOutput: string | undefined;
