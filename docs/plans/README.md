@@ -20,6 +20,7 @@
 | 16 | [Subagent agent→model mirror fix + agent discovery](done/plan-016-subagent-model-mirror.md) | ✅ COMPLETED (squash `9ae002a`) | 2026-07-28 |
 | 18 | [Bounded subagent execution](done/2026-08-06-bounded-subagent-execution.md) | ✅ COMPLETED | 2026-08-06 |
 | 20 | [Parallel result visibility](done/2026-08-07-parallel-result-visibility.md) | ✅ COMPLETED | 2026-08-07 |
+| 21 | [Repeated subagent error breaker](done/2026-08-07-repeated-error-breaker.md) | ✅ COMPLETED | 2026-08-07 |
 
 > **Notes:**
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -27,6 +28,6 @@
 
 ## Quick Stats
 
-- Total Plans: 18
-- Completed: 18
+- Total Plans: 19
+- Completed: 19
 - In Progress: 0
