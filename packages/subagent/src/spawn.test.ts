@@ -34,7 +34,6 @@ describe("bounded spawn", () => {
     expect(args).toEqual([
       "--mode", "json", "--no-session", "-p",
       "--model", "openai/gpt-5",
-      "--exclude-tools", "subagent",
       "--extension", "/package/src/child-guard.ts",
       "review this",
     ]);

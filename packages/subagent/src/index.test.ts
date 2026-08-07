@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SUBAGENT_PARAMS_SCHEMA } from "./index.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerSubagent, SUBAGENT_PARAMS_SCHEMA } from "./index.js";
 
 interface SchemaNode {
   properties?: Record<string, SchemaNode>;
@@ -9,6 +10,25 @@ interface SchemaNode {
 }
 
 const limitProperties = (node: SchemaNode | undefined) => node?.properties?.limits?.properties;
+
+describe("subagent registration", () => {
+  it("does not register delegation tools inside a spawned subagent", () => {
+    const previousSocket = process.env.PI_SUBAGENT_SOCKET;
+    const tools: string[] = [];
+    process.env.PI_SUBAGENT_SOCKET = "/tmp/subagent.sock";
+
+    try {
+      registerSubagent({
+        registerTool: (tool: { name: string }) => tools.push(tool.name),
+      } as unknown as ExtensionAPI);
+    } finally {
+      if (previousSocket === undefined) delete process.env.PI_SUBAGENT_SOCKET;
+      else process.env.PI_SUBAGENT_SOCKET = previousSocket;
+    }
+
+    expect(tools).toEqual([]);
+  });
+});
 
 describe("subagent limits schema", () => {
   it("exposes identical limits on top-level and parallel task inputs", () => {

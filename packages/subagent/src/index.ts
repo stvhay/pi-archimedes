@@ -65,6 +65,8 @@ interface RenderTheme {
 // ── Tool registration ───────────────────────────────────────────────────────
 
 export function registerSubagent(pi: ExtensionAPI): void {
+  if (process.env.PI_SUBAGENT_SOCKET) return;
+
   pi.registerTool({
     name: "subagent",
     label: "Subagent",

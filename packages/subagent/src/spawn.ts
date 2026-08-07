@@ -179,7 +179,6 @@ export function buildSubagentArgs(
   if (options.agent?.tools && options.agent.tools.length > 0) {
     args.push("--tools", options.agent.tools.join(","));
   }
-  args.push("--exclude-tools", "subagent");
 
   const systemPrompt = options.agent?.systemPrompt?.trim();
   if (systemPrompt) args.push("--system-prompt", systemPrompt);
