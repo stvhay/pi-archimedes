@@ -19,6 +19,7 @@
 | 14 | [Agents local JSON for model overrides](done/plan-015-agents-local-json.md) | ✅ COMPLETED | 2026-07-27 |
 | 16 | [Subagent agent→model mirror fix + agent discovery](done/plan-016-subagent-model-mirror.md) | ✅ COMPLETED (squash `9ae002a`) | 2026-07-28 |
 | 18 | [Bounded subagent execution](done/2026-08-06-bounded-subagent-execution.md) | ✅ COMPLETED | 2026-08-06 |
+| 19 | [Subagent one-shot mode](done/2026-08-06-subagent-one-shot-mode.md) | ✅ COMPLETED | 2026-08-06 |
 | 20 | [Parallel result visibility](done/2026-08-07-parallel-result-visibility.md) | ✅ COMPLETED | 2026-08-07 |
 
 > **Notes:**
@@ -27,6 +28,6 @@
 
 ## Quick Stats
 
-- Total Plans: 18
-- Completed: 18
+- Total Plans: 19
+- Completed: 19
 - In Progress: 0

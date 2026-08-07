@@ -10,6 +10,7 @@ Subagent dispatch with live TUI streaming and cost tracking for the [Pi coding a
 - **Per-agent model override** — each subagent can use its own model, falling back to the parent's selection
 - **Cost tracking** — detailed token usage (input, output, cache read/write) and cost per subagent, emitted through the core bus for the footer to consume
 - **Execution limits** — optional per-child request, tool, token, cost, and wall-time ceilings with structured stop evidence and preserved partial output
+- **One-shot mode** — one cold provider response from a complete packet, without tools or ambient Pi resources
 - **`/agents` command** — full CRUD TUI for managing agent definitions with model picker, tool picker, and cross-scope collision warnings (available via the meta package)
 
 ## Screenshots
@@ -96,6 +97,31 @@ Bound one child directly:
 Top-level limits apply to every parallel child. A task may add stricter `limits`; it cannot raise operator or top-level ceilings. Results include a structured `termination` reason and preserve finalized or in-flight output and usage when a child is stopped.
 
 Request, tool-call, fanout, and wall-time limits are enforced before additional work. `maxDurationMs` cannot exceed `2,147,483,647`, the maximum safe Node.js timer delay. Token and cost limits use reported assistant usage, so they may exceed the configured value by one provider response. Keep Pi's `retry.provider.maxRetries` at `0` for bounded runs, and use a provider-side account or key cap when a hard spend ceiling is required.
+
+### One-shot mode
+
+Use `one-shot` for a complete read-only packet that needs one model response without tool loops or ambient project material:
+
+```jsonc
+{
+  "task": "Review the embedded patch and return findings as JSON",
+  "mode": "one-shot",
+  "thinking": "high"
+}
+```
+
+One-shot mode:
+
+- allows one provider request and otherwise uses the same timeout behavior as agentic mode;
+- disables tools, discovered extensions, skills, context files, and session persistence;
+- allows explicit `/template arguments` prompt-template macros without injecting templates into ordinary tasks;
+- explicitly reloads only Archimedes' child execution guard;
+- uses a packet-only system prompt unless a selected agent supplies one;
+- preserves the normal result, usage, cancellation, and termination shapes.
+
+`mode` and `thinking` are also accepted on each parallel task. Task values override top-level values; selected agent frontmatter remains authoritative for model, thinking, and system prompt. Agent tool and inherited-resource settings cannot override one-shot isolation flags.
+
+Process environment, provider credentials, and ordinary Pi settings remain inherited. Nonzero `retry.provider.maxRetries` is rejected because it would violate the one-request contract. Provider timeout settings, parent cancellation, and optional `maxDurationMs` limits behave as they do in agentic mode. Headless scripts and durable run-bundle workers remain outside this interactive tool mode.
 
 ### Settings
 
