@@ -43,6 +43,7 @@ function streamState(): StreamState {
     toolCount: 0,
     turnCount: 0,
     usage: readUsage(undefined),
+    turnUsage: readUsage(undefined),
     partialUsage: readUsage(undefined),
     currentTool: undefined,
     currentToolArgs: undefined,

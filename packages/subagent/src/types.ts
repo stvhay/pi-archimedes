@@ -74,6 +74,10 @@ export interface SubagentProgress {
   currentToolArgs: string | undefined;
   currentToolStartedAt: number | undefined;
   toolCount: number;
+  /** Current provider turn number. Optional for external progress producers. */
+  turnCount?: number;
+  /** Tokens observed in the current provider turn. */
+  turnTokens?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
@@ -127,6 +131,7 @@ export interface StreamState {
   toolCount: number;
   turnCount: number;
   usage: Usage;
+  turnUsage: Usage;
   partialUsage: Usage;
   currentTool: string | undefined;
   currentToolArgs: string | undefined;

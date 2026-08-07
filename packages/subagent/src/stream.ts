@@ -59,6 +59,7 @@ export function streamEvents(
       toolCount: 0,
       turnCount: 0,
       usage: readUsage(undefined),
+      turnUsage: readUsage(undefined),
       partialUsage: readUsage(undefined),
       currentTool: undefined,
       currentToolArgs: undefined,
@@ -100,6 +101,7 @@ export function streamEvents(
 
     const buildProgress = (): SubagentProgress => {
       const usage = observedUsage();
+      const turnUsage = state.partialUsage.totalTokens > 0 ? state.partialUsage : state.turnUsage;
       return {
         agent: callbacks.agent ?? "subagent",
         status: "running",
@@ -108,6 +110,8 @@ export function streamEvents(
         currentToolArgs: state.currentToolArgs,
         currentToolStartedAt: state.currentToolStartedAt,
         toolCount: state.toolCount,
+        turnCount: state.turnCount,
+        turnTokens: turnUsage.totalTokens,
         inputTokens: usage.input,
         outputTokens: usage.output,
         cacheReadTokens: usage.cacheRead,
@@ -183,6 +187,8 @@ export function streamEvents(
         }
         case "turn_start": {
           state.turnCount++;
+          state.turnUsage = readUsage(undefined);
+          state.partialUsage = readUsage(undefined);
           break;
         }
         case "message_update": {

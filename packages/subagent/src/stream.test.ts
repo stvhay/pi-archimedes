@@ -113,6 +113,29 @@ describe("streamEvents bounded termination", () => {
     expect(result.termination).toMatchObject({ reason: "process-error", usageState: "partial" });
   });
 
+  it("reports current-turn and cumulative tokens across provider turns", async () => {
+    const child = fakeChild();
+    const updates: Array<{ turnCount?: number; turnTokens?: number; tokens: number }> = [];
+    const pending = streamEvents(child, {
+      onProgress: (progress) => updates.push(progress),
+    });
+
+    child.stdout.write(`${JSON.stringify({ type: "turn_start" })}\n`);
+    child.stdout.write(`${JSON.stringify(assistantEvent("message_end", "first", 4, 2))}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "turn_start" })}\n`);
+    child.stdout.write(`${JSON.stringify(assistantEvent("message_update", "second partial", 3, 1))}\n`);
+    child.emit("close", 1, null);
+
+    const result = await pending;
+    expect(result.progress).toMatchObject({ turnCount: 2, turnTokens: 5, tokens: 12 });
+    expect(updates).toContainEqual(expect.objectContaining({
+      turnCount: 2,
+      turnTokens: 5,
+      tokens: 12,
+    }));
+    expect(result.usage).toMatchObject({ input: 7, output: 3, cacheRead: 2, cacheWrite: 0 });
+  });
+
   it("keeps ordinary stderr as the process error", async () => {
     const child = fakeChild();
     const pending = streamEvents(child);

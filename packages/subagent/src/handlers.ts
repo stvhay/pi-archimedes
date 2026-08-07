@@ -210,7 +210,8 @@ export function handleMessageEnd(state: StreamState, event: MessageEndEvent): vo
   }
 
   // Extract usage (turnCount tracked via turn_start in stream.ts)
-  state.usage = addUsage(state.usage, readUsage(message.usage));
+  state.turnUsage = readUsage(message.usage);
+  state.usage = addUsage(state.usage, state.turnUsage);
 }
 
 /**
