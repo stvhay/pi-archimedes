@@ -67,8 +67,15 @@ function completedResult(task: string): SubagentResult {
 }
 
 function registeredSubagentTool() {
+  const previousSocket = process.env.PI_SUBAGENT_SOCKET;
   const tools: Array<{ name: string; execute: (...args: any[]) => Promise<any> }> = [];
-  registerSubagent({ registerTool: (tool: any) => tools.push(tool) } as unknown as ExtensionAPI);
+  delete process.env.PI_SUBAGENT_SOCKET;
+  try {
+    registerSubagent({ registerTool: (tool: any) => tools.push(tool) } as unknown as ExtensionAPI);
+  } finally {
+    if (previousSocket === undefined) delete process.env.PI_SUBAGENT_SOCKET;
+    else process.env.PI_SUBAGENT_SOCKET = previousSocket;
+  }
   return tools.find((tool) => tool.name === "subagent")!;
 }
 

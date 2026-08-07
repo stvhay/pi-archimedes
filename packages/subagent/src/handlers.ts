@@ -106,9 +106,18 @@ export function handleToolResult(state: StreamState, event: ToolEndEvent): void 
   }
 }
 
+function objectItems<T>(value: unknown): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => item !== null && typeof item === "object") as T[];
+}
+
+function assistantContent(message: AssistantMessage): AssistantMessage["content"] {
+  return objectItems<AssistantMessage["content"][number]>(message.content);
+}
+
 function assistantText(message: AssistantMessage): string | undefined {
   const parts: string[] = [];
-  for (const part of message.content) {
+  for (const part of assistantContent(message)) {
     if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
       parts.push(part.text);
     } else if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim()) {
@@ -124,8 +133,8 @@ function clearPartialUsage(state: StreamState): void {
 
 /** Handle the latest in-flight assistant message as replaceable partial state. */
 export function handleMessageUpdate(state: StreamState, event: MessageUpdateEvent): void {
-  if (event.message.role !== "assistant") return;
   const message = event.message;
+  if (!message || typeof message !== "object" || message.role !== "assistant") return;
   if (!state.model && message.model) state.model = message.model;
   state.streamingOutput = assistantText(message);
   state.partialUsage = readUsage(message.usage);
@@ -135,8 +144,8 @@ export function handleMessageUpdate(state: StreamState, event: MessageUpdateEven
  * Handle a message_end event — extract usage and text from assistant messages.
  */
 export function handleMessageEnd(state: StreamState, event: MessageEndEvent): void {
-  if (event.message.role !== "assistant") return;
   const message = event.message;
+  if (!message || typeof message !== "object" || message.role !== "assistant") return;
 
   // Finalized data replaces the latest partial message.
   state.streamingOutput = undefined;
@@ -148,12 +157,16 @@ export function handleMessageEnd(state: StreamState, event: MessageEndEvent): vo
   }
 
   // Collect text + thinking output
-  for (const part of message.content) {
-    if (part.type === "text" && part.text.trim()) {
+  for (const part of assistantContent(message)) {
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
       state.accumulatedOutput.push(part.text);
       const lines = part.text.split("\n").filter((line: string) => line.trim());
       state.recentOutput.push(...lines.slice(-10));
-    } else if (part.type === "thinking" && part.thinking.trim()) {
+    } else if (
+      part.type === "thinking" &&
+      typeof part.thinking === "string" &&
+      part.thinking.trim()
+    ) {
       state.accumulatedOutput.push(`[thinking] ${part.thinking.trim()}`);
       const lines = part.thinking.split("\n").filter((line: string) => line.trim());
       state.recentOutput.push(...lines.slice(-5).map((line: string) => `[thinking] ${line}`));
@@ -173,20 +186,13 @@ export function handleMessageEnd(state: StreamState, event: MessageEndEvent): vo
  * Handle an agent_end event — extract final output from the last assistant message.
  */
 export function handleAgentEnd(state: StreamState, event: AgentEndEvent): void {
-  if (event.messages.length === 0) return;
+  const messages = objectItems<AgentEndEvent["messages"][number]>(event.messages);
+  if (messages.length === 0) return;
 
   // Use only the last assistant message for final output
-  const lastAssistant = [...event.messages].reverse().find((message): message is AssistantMessage =>
+  const lastAssistant = [...messages].reverse().find((message): message is AssistantMessage =>
     message.role === "assistant");
   if (!lastAssistant) return;
 
-  const allText: string[] = [];
-  for (const part of lastAssistant.content) {
-    if (part.type === "text" && part.text.trim()) {
-      allText.push(part.text);
-    } else if (part.type === "thinking" && part.thinking.trim()) {
-      allText.push(`[thinking] ${part.thinking.trim()}`);
-    }
-  }
-  state.finalOutput = allText.length > 0 ? allText.join("\n\n") : undefined;
+  state.finalOutput = assistantText(lastAssistant);
 }

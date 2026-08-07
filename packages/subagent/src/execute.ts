@@ -9,32 +9,18 @@ import type { SubagentLimits, SubagentProgress, SubagentResult, SubagentUsage } 
 export interface ExecutionControl {
   signal: AbortSignal;
   timedOut: () => boolean;
-  cleanup: () => void;
 }
 
 export function createExecutionControl(
   parentSignal: AbortSignal | undefined,
   durationMs: number | undefined,
 ): ExecutionControl {
-  const controller = new AbortController();
-  let timeoutExpired = false;
-  const abortFromParent = () => controller.abort();
-  if (parentSignal?.aborted) abortFromParent();
-  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
-
-  const timer = durationMs === undefined ? undefined : setTimeout(() => {
-    timeoutExpired = true;
-    controller.abort();
-  }, durationMs);
-  timer?.unref();
-
+  const timeoutSignal = durationMs === undefined ? undefined : AbortSignal.timeout(durationMs);
+  const signals = [parentSignal, timeoutSignal].filter((signal): signal is AbortSignal => Boolean(signal));
+  const signal = AbortSignal.any(signals);
   return {
-    signal: controller.signal,
-    timedOut: () => timeoutExpired,
-    cleanup: () => {
-      if (timer) clearTimeout(timer);
-      parentSignal?.removeEventListener("abort", abortFromParent);
-    },
+    signal,
+    timedOut: () => timeoutSignal?.aborted === true && signal.reason === timeoutSignal.reason,
   };
 }
 
@@ -244,8 +230,6 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
     // from the pending placeholder to "failed" (prevents stale "Starting..." display).
     options.onUpdate?.(result.progress!);
     return applyControlTermination(result, options, control, durationMs);
-  } finally {
-    control.cleanup();
   }
 }
 

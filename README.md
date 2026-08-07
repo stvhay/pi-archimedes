@@ -183,7 +183,7 @@ Uses Pi's core `terminal.showImages` setting to control inline previews. No pack
 | `defaultLimits.maxToolCalls` | number | `0` | Per-child tool calls; `0` is unlimited |
 | `defaultLimits.maxTotalTokens` | number | `0` | Per-child input, output, and cache tokens; `0` is unlimited |
 | `defaultLimits.maxCostUsd` | number | `0` | Observed per-child cost in USD; `0` is unlimited |
-| `defaultLimits.maxDurationMs` | number | `0` | Per-child wall time in milliseconds; `0` is unlimited |
+| `defaultLimits.maxDurationMs` | number | `0` | Per-child wall time in milliseconds; `0` is unlimited, maximum `2,147,483,647` |
 
 Token and cost limits can overshoot by one provider response. Use provider-side account or key limits for a hard spend ceiling.
 

@@ -1,5 +1,7 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
+export const MAX_SUBAGENT_DURATION_MS = 2_147_483_647;
+
 export interface SubagentLimits {
   maxProviderRequests?: number;
   maxToolCalls?: number;
@@ -8,22 +10,27 @@ export interface SubagentLimits {
   maxDurationMs?: number;
 }
 
-export type SubagentTerminationReason =
-  | "completed"
-  | "user-abort"
-  | "request-limit"
-  | "tool-limit"
-  | "token-limit"
-  | "cost-limit"
-  | "time-limit"
-  | "usage-unknown"
-  | "process-error";
+export const SUBAGENT_TERMINATION_REASONS = [
+  "completed",
+  "user-abort",
+  "request-limit",
+  "tool-limit",
+  "token-limit",
+  "cost-limit",
+  "time-limit",
+  "usage-unknown",
+  "process-error",
+] as const;
+export type SubagentTerminationReason = (typeof SUBAGENT_TERMINATION_REASONS)[number];
+
+export const SUBAGENT_USAGE_STATES = ["complete", "partial", "unknown"] as const;
+export type SubagentUsageState = (typeof SUBAGENT_USAGE_STATES)[number];
 
 export interface SubagentTermination {
   reason: SubagentTerminationReason;
   limit?: number;
   observed?: number;
-  usageState: "complete" | "partial" | "unknown";
+  usageState: SubagentUsageState;
 }
 
 export interface SubagentUsage {

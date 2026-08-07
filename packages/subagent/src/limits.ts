@@ -1,4 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  MAX_SUBAGENT_DURATION_MS,
+  SUBAGENT_TERMINATION_REASONS,
+  SUBAGENT_USAGE_STATES,
+} from "./types.js";
 import type { SubagentLimits, SubagentTermination, SubagentTerminationReason } from "./types.js";
 
 const LIMIT_KEYS = [
@@ -18,17 +23,8 @@ const INTEGER_KEYS = new Set<keyof SubagentLimits>([
 
 export const SUBAGENT_LIMITS_ENV = "PI_ARCHIMEDES_SUBAGENT_LIMITS";
 const STOP_PREFIX = "PI_ARCHIMEDES_LIMIT_STOP ";
-const STOP_REASONS = new Set<SubagentTerminationReason>([
-  "completed",
-  "user-abort",
-  "request-limit",
-  "tool-limit",
-  "token-limit",
-  "cost-limit",
-  "time-limit",
-  "usage-unknown",
-  "process-error",
-]);
+const STOP_REASONS = new Set<string>(SUBAGENT_TERMINATION_REASONS);
+const USAGE_STATES = new Set<string>(SUBAGENT_USAGE_STATES);
 
 export function normalizeLimits(
   value: Partial<Record<keyof SubagentLimits, unknown>> | undefined,
@@ -45,6 +41,9 @@ export function normalizeLimits(
     }
     if (INTEGER_KEYS.has(key) && !Number.isInteger(raw)) {
       throw new Error(`${key} must be an integer`);
+    }
+    if (key === "maxDurationMs" && raw > MAX_SUBAGENT_DURATION_MS) {
+      throw new Error(`${key} must not exceed ${MAX_SUBAGENT_DURATION_MS}`);
     }
     normalized[key] = raw;
   }
@@ -236,7 +235,7 @@ export function decodeLimitStop(line: string): SubagentTermination | undefined {
       !value.reason ||
       !STOP_REASONS.has(value.reason) ||
       !value.usageState ||
-      !["complete", "partial", "unknown"].includes(value.usageState) ||
+      !USAGE_STATES.has(value.usageState) ||
       (value.limit !== undefined && !isNonNegativeFiniteNumber(value.limit)) ||
       (value.observed !== undefined && !isNonNegativeFiniteNumber(value.observed))
     ) {

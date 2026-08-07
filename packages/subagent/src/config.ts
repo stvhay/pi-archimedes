@@ -54,24 +54,6 @@ export function saveSubagentConfig(config: SubagentConfig): void {
   saveConfig(NAMESPACE, config);
 }
 
-export function resolveConfiguredLimits(config: SubagentConfig): SubagentLimits | undefined {
-  return normalizeLimits(config.defaultLimits, true);
-}
-
-export function validateDispatchPolicy(
-  config: SubagentConfig,
-  childCount: number,
-  limits: SubagentLimits | undefined,
-  providerMaxRetries: number,
-): void {
-  if (config.maxParallel > 0 && childCount > config.maxParallel) {
-    throw new Error(`Parallel task count ${childCount} exceeds archimedes.subagent.maxParallel (${config.maxParallel})`);
-  }
-  if (limits && providerMaxRetries > 0) {
-    throw new Error("Bounded subagents require retry.provider.maxRetries to be 0");
-  }
-}
-
 export function getSubagentSettingsItems(config = loadSubagentConfig()): SettingItem[] {
   return [
     setting("subagentMaxParallel", "Subagent Max Parallel", "Maximum children per parallel call; 0 is unlimited", config.maxParallel),

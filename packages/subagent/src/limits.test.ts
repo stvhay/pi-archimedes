@@ -36,6 +36,7 @@ describe("normalizeLimits", () => {
     expect(() => normalizeLimits({ maxProviderRequests: -1 }, true)).toThrow("maxProviderRequests");
     expect(() => normalizeLimits({ maxProviderRequests: 1.5 }, false)).toThrow("maxProviderRequests");
     expect(() => normalizeLimits({ maxCostUsd: Number.POSITIVE_INFINITY }, false)).toThrow("maxCostUsd");
+    expect(() => normalizeLimits({ maxDurationMs: 2_147_483_648 }, false)).toThrow("maxDurationMs");
   });
 
   it("preserves valid field units", () => {

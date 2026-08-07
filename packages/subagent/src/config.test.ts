@@ -15,9 +15,7 @@ import {
   getSubagentSettingsItems,
   loadSubagentConfig,
   loadSubagentConfigOrDefault,
-  resolveConfiguredLimits,
   saveSubagentConfig,
-  validateDispatchPolicy,
 } from "./config.js";
 
 describe("subagent config", () => {
@@ -30,7 +28,6 @@ describe("subagent config", () => {
     loadConfigMock.mockReturnValue(DEFAULT_SUBAGENT_CONFIG);
 
     expect(loadSubagentConfig()).toEqual(DEFAULT_SUBAGENT_CONFIG);
-    expect(resolveConfiguredLimits(loadSubagentConfig())).toBeUndefined();
   });
 
   it("merges a partial nested defaultLimits object", () => {
@@ -49,7 +46,6 @@ describe("subagent config", () => {
         maxDurationMs: 0,
       },
     });
-    expect(resolveConfiguredLimits(loadSubagentConfig())).toEqual({ maxProviderRequests: 3 });
   });
 
   it("fails closed on malformed settings", () => {
@@ -76,17 +72,6 @@ describe("subagent config", () => {
     saveSubagentConfig(DEFAULT_SUBAGENT_CONFIG);
 
     expect(saveConfigMock).toHaveBeenCalledWith("archimedes.subagent", DEFAULT_SUBAGENT_CONFIG);
-  });
-
-  it("rejects fanout above the operator ceiling before spawn", () => {
-    expect(() => validateDispatchPolicy({ ...DEFAULT_SUBAGENT_CONFIG, maxParallel: 2 }, 3, undefined, 0))
-      .toThrow("maxParallel");
-  });
-
-  it("rejects provider retries only for bounded runs", () => {
-    expect(() => validateDispatchPolicy(DEFAULT_SUBAGENT_CONFIG, 1, { maxProviderRequests: 2 }, 1))
-      .toThrow("retry.provider.maxRetries");
-    expect(() => validateDispatchPolicy(DEFAULT_SUBAGENT_CONFIG, 1, undefined, 1)).not.toThrow();
   });
 
   it("exposes every operator ceiling to the composed settings UI", () => {

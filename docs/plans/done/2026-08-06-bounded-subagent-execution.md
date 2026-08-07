@@ -11,7 +11,7 @@
 
 **Compatibility:** Public fields are additive. Limit enforcement uses Pi extension hooks available in `@earendil-works/pi-coding-agent` 0.74.0, the earliest public release in the current package scope. Spawned children suppress recursive delegation registration through the existing `PI_SUBAGENT_SOCKET` marker rather than a newer CLI flag. Native nested tool usage is returned for newer Pi versions; older compatible Pi versions still receive the same usage in `details.results` and Archimedes bus events.
 
-**Public contract:** `limits` is optional on the top-level single-task input, the top-level parallel input, and each parallel task. It contains `maxProviderRequests` (count), `maxToolCalls` (count), `maxTotalTokens` (input + output + cache read + cache write), `maxCostUsd` (USD), and `maxDurationMs` (milliseconds). Top-level parallel limits apply to every child; task limits tighten them. Operator `defaultLimits` tighten all calls, and operator `maxParallel` rejects oversized fanout before any spawn.
+**Public contract:** `limits` is optional on the top-level single-task input, the top-level parallel input, and each parallel task. It contains `maxProviderRequests` (count), `maxToolCalls` (count), `maxTotalTokens` (input + output + cache read + cache write), `maxCostUsd` (USD), and `maxDurationMs` (milliseconds, at most Node's safe timer delay of `2,147,483,647`). Top-level parallel limits apply to every child; task limits tighten them. Operator `defaultLimits` tighten all calls, and operator `maxParallel` rejects oversized fanout before any spawn.
 
 **Limit semantics:** Request, tool-call, fanout, and wall-time limits are admission controls. Token and USD limits use assistant usage, including the latest in-flight partial usage when a process is terminated, and may exceed the configured value by one provider response. Provider SDK retries are not separately observable; bounded runs use the public `SettingsManager.create(cwd).getProviderRetrySettings()` API to reject configured nonzero `retry.provider.maxRetries`. Auto-compaction is cancelled in bounded child processes so its extra model request cannot bypass request accounting.
 
@@ -125,7 +125,8 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 1. Add failing synthetic-process tests for marker parsing, stdout/stderr drain ordering, partial-output fallback, structured termination, ordinary stderr, and cancellation distinction.
 2. Implement line-oriented stderr parsing and prompt child termination on a valid limit marker.
 3. Track `message_update` as replaceable in-flight text/usage; fold finalized `message_end` data without double counting and preserve both when `agent_end` never arrives.
-4. Track complete token and cost components needed for native aggregate usage.
+4. Reuse one assistant-content normalizer for streaming and final events so malformed child JSON cannot crash finalization.
+5. Track complete token and cost components needed for native aggregate usage.
 5. Run focused tests and package typecheck.
 
 **Focused verification:**
@@ -139,6 +140,8 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 **Context:** Resolve limits before spawn, reject unsafe provider-retry settings, enforce one independent deadline per child, cap fanout before dispatch, and aggregate child usage on the final tool result.
 
 **Files:**
+- Create: `packages/subagent/src/dispatch-policy.ts`
+- Create: `packages/subagent/src/dispatch-policy.test.ts`
 - Create: `packages/subagent/src/execute.test.ts`
 - Modify: `packages/subagent/src/index.ts`
 - Modify: `packages/subagent/src/execute.ts`
@@ -147,14 +150,16 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 
 **Steps:**
 1. Add failing tests for independent deadline state, stopped-child/successful-sibling ordering, fanout rejection, and aggregate usage.
-2. Resolve operator, top-level, and task limits once per child; use Pi's public `SettingsManager` to reject nonzero provider retries for bounded runs.
-3. Compose parent cancellation with per-child deadlines and classify timeout versus user abort.
-4. Return aggregate `usage` and emit cache-token deltas through the existing bus.
-5. Run focused tests and package/meta typechecks.
+2. Prepare each child once, reusing its resolved agent config and limits across validation and dispatch; use Pi's public `SettingsManager` to reject nonzero provider retries for bounded runs.
+3. Keep public subagent config focused on persistence/UI and put runtime admission in an internal dispatch-policy module.
+4. Compose parent cancellation with per-child deadlines through native `AbortSignal` primitives and classify timeout versus user abort.
+5. Return aggregate `usage` and emit cache-token deltas through the existing bus.
+6. Derive tool input types from the registered TypeBox schema instead of mirroring its fields.
+7. Run focused tests and package/meta typechecks.
 
 **Focused verification:**
 ```bash
-corepack pnpm --filter @pi-archimedes/subagent exec vitest run src/execute.test.ts
+corepack pnpm --filter @pi-archimedes/subagent exec vitest run src/dispatch-policy.test.ts src/execute.test.ts
 corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 corepack pnpm --filter pi-archimedes exec tsc --noEmit
 ```

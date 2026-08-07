@@ -34,16 +34,15 @@ function result(task: string, exitCode: number): SubagentResult {
 }
 
 describe("createExecutionControl", () => {
-  it("aborts one child at its deadline and records timeout state", () => {
-    vi.useFakeTimers();
-    const control = createExecutionControl(undefined, 1000);
+  it("aborts one child at its deadline and records timeout state", async () => {
+    const control = createExecutionControl(undefined, 5);
 
-    vi.advanceTimersByTime(1000);
+    await new Promise<void>((resolve) => {
+      control.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
 
     expect(control.signal.aborted).toBe(true);
     expect(control.timedOut()).toBe(true);
-    control.cleanup();
-    vi.useRealTimers();
   });
 
   it("propagates parent cancellation without calling it a timeout", () => {
@@ -54,7 +53,16 @@ describe("createExecutionControl", () => {
 
     expect(control.signal.aborted).toBe(true);
     expect(control.timedOut()).toBe(false);
-    control.cleanup();
+  });
+
+  it("keeps parent cancellation provenance after the deadline also expires", async () => {
+    const parent = new AbortController();
+    const control = createExecutionControl(parent.signal, 5);
+
+    parent.abort();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(control.timedOut()).toBe(false);
   });
 });
 
@@ -63,7 +71,7 @@ describe("applyControlTermination", () => {
     const controlled = applyControlTermination(
       result("clean", 0),
       { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, limits: { maxDurationMs: 1000 } },
-      { signal: new AbortController().signal, timedOut: () => true, cleanup: vi.fn() },
+      { signal: new AbortController().signal, timedOut: () => true },
       1001,
     );
 
@@ -77,7 +85,7 @@ describe("applyControlTermination", () => {
     const controlled = applyControlTermination(
       result("clean", 0),
       { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: parent.signal, onUpdate: undefined },
-      { signal: parent.signal, timedOut: () => false, cleanup: vi.fn() },
+      { signal: parent.signal, timedOut: () => false },
       10,
     );
 
