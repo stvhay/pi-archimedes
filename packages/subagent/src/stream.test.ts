@@ -113,6 +113,20 @@ describe("streamEvents bounded termination", () => {
     expect(result.termination).toMatchObject({ reason: "process-error", usageState: "partial" });
   });
 
+  it("replaces in-flight usage with finalized usage in the same turn", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    child.stdout.write(`${JSON.stringify({ type: "turn_start" })}\n`);
+    child.stdout.write(`${JSON.stringify(assistantEvent("message_update", "partial", 2, 1))}\n`);
+    child.stdout.write(`${JSON.stringify(assistantEvent("message_end", "final", 4, 2))}\n`);
+    child.emit("close", 0, null);
+
+    const result = await pending;
+    expect(result.usage).toMatchObject({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0 });
+    expect(result.progress).toMatchObject({ turnCount: 1, turnTokens: 7, tokens: 7 });
+  });
+
   it("reports current-turn and cumulative tokens across provider turns", async () => {
     const child = fakeChild();
     const updates: Array<{ turnCount?: number; turnTokens?: number; tokens: number }> = [];
