@@ -22,6 +22,7 @@ export function buildExpandedText(
   const statsLine = buildStatsLine({
     turns: result.usage.turns,
     toolCount: result.progressSummary?.toolCount,
+    turnTokens: progress?.turnTokens,
     tokens: result.progressSummary?.tokens,
     durationMs: result.progressSummary?.durationMs,
     cost: result.usage.cost,
@@ -94,8 +95,9 @@ export function renderProgressExpanded(
   // Stats line (same as compact view)
   const modelLabel = progress.model ? theme.fg("accent", progress.model) : "";
   const statsLine = buildStatsLine({
-    turns: undefined,
+    turns: progress.turnCount,
     toolCount: progress.toolCount,
+    turnTokens: progress.turnTokens,
     tokens: progress.tokens,
     durationMs: progress.durationMs,
     cost: progress.cost,
@@ -170,8 +172,9 @@ export function buildProgressExpandedText(
   // Stats line (same as compact view)
   const modelLabel = progress.model ? theme.fg("accent", progress.model) : "";
   const statsLine = buildStatsLine({
-    turns: undefined,
+    turns: progress.turnCount,
     toolCount: progress.toolCount,
+    turnTokens: progress.turnTokens,
     tokens: progress.tokens,
     durationMs: progress.durationMs,
     cost: progress.cost,

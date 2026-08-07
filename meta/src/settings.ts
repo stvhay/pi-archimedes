@@ -7,17 +7,20 @@ import { getCoreSettingsItems } from "@pi-archimedes/core";
 import { getFooterSettingsItems } from "@pi-archimedes/footer/config";
 // diff (shiki) is lazy-loaded below to keep shiki out of the startup import chain
 import { getNotifySettingsItems } from "@pi-archimedes/notify";
+import { getSubagentSettingsItems } from "@pi-archimedes/subagent/config";
 import {
   loadAllConfig,
   saveCoreConfig,
   saveFooterConfig,
   saveDiffConfig,
   saveNotifyConfig,
+  saveSubagentConfig,
   ANIMATION_STYLES,
   type CoreConfig,
   type FooterConfig,
   type DiffConfig,
   type NotifyConfig,
+  type SubagentConfig,
 } from "./config.js";
 
 // ── Factory: text submenu ───────────────────────────────────────────────
@@ -60,6 +63,7 @@ function createNumberSubmenu(opts: {
   cancelHint?: string;
   confirmHint?: string;
   min?: number;
+  allowDecimal?: boolean;
 }): (currentValue: string, done: (selectedValue?: string) => void) => import("@earendil-works/pi-tui").Component {
   return (currentValue: string, done: (selectedValue?: string) => void) => {
     const state = { value: currentValue };
@@ -80,13 +84,17 @@ function createNumberSubmenu(opts: {
       handleInput(data: string): void {
         if (data === "\x1b") { done(); return; }
         if (data === "\r" || data === "\n") {
-          const n = parseInt(state.value, 10);
-          if (Number.isFinite(n) && (!opts.min || n >= opts.min)) done(String(n));
+          const n = opts.allowDecimal ? Number.parseFloat(state.value) : Number.parseInt(state.value, 10);
+          if (Number.isFinite(n) && (opts.min === undefined || n >= opts.min)) done(String(n));
           else done();
           return;
         }
         if (data === "\x7f" || data === "\x08") { state.value = state.value.slice(0, -1); }
-        else if (/^\d$/.test(data)) { state.value += data; }
+        else {
+          const isDigit = /^\d$/.test(data);
+          const isDecimalPoint = opts.allowDecimal && data === "." && !state.value.includes(".");
+          if (isDigit || isDecimalPoint) state.value += data;
+        }
       },
     };
   };
@@ -103,12 +111,17 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   const footerConfig: FooterConfig = { ...allConfig.footer };
   const diffConfig: DiffConfig = { ...allConfig.diff };
   const notifyConfig: NotifyConfig = { ...allConfig.notify };
+  const subagentConfig: SubagentConfig = {
+    ...allConfig.subagent,
+    defaultLimits: { ...allConfig.subagent.defaultLimits },
+  };
 
   // Build composed items from sub-packages
   const coreItems = getCoreSettingsItems(coreConfig);
   const footerItems = getFooterSettingsItems();
   const diffItems = getDiffSettingsItems();
   const notifyItems = getNotifySettingsItems(notifyConfig);
+  const subagentItems = getSubagentSettingsItems(subagentConfig);
 
   // Add submenus for text/number fields
   const addSubmenus = (items: SettingItem[]) => {
@@ -152,6 +165,14 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
           confirmHint: "min 80",
           min: 80,
         });
+      } else if (item.id.startsWith("subagentMax")) {
+        item.submenu = createNumberSubmenu({
+          label: `Enter ${item.label} (ESC to cancel):`,
+          cancelHint: "ESC: cancel",
+          confirmHint: "0: unlimited",
+          min: 0,
+          allowDecimal: item.id === "subagentMaxCostUsd",
+        });
       } else if (item.id === "delayMs") {
         item.submenu = createNumberSubmenu({
           label: "Enter delay in seconds (ESC to cancel):",
@@ -167,12 +188,14 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   addSubmenus(diffItems);
   addSubmenus(footerItems);
   addSubmenus(notifyItems);
+  addSubmenus(subagentItems);
 
   const items: SettingItem[] = [
     ...coreItems,
     ...footerItems,
     ...diffItems,
     ...notifyItems,
+    ...subagentItems,
     {
       id: "save",
       label: "Save",
@@ -222,12 +245,21 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
           break;
         }
 
+        // ── Subagent settings ──
+        case "subagentMaxParallel": subagentConfig.maxParallel = Number.parseInt(newValue, 10); break;
+        case "subagentMaxProviderRequests": subagentConfig.defaultLimits.maxProviderRequests = Number.parseInt(newValue, 10); break;
+        case "subagentMaxToolCalls": subagentConfig.defaultLimits.maxToolCalls = Number.parseInt(newValue, 10); break;
+        case "subagentMaxTotalTokens": subagentConfig.defaultLimits.maxTotalTokens = Number.parseInt(newValue, 10); break;
+        case "subagentMaxCostUsd": subagentConfig.defaultLimits.maxCostUsd = Number.parseFloat(newValue); break;
+        case "subagentMaxDurationMs": subagentConfig.defaultLimits.maxDurationMs = Number.parseInt(newValue, 10); break;
+
         // ── Save ──
         case "save": {
           saveCoreConfig(coreConfig);
           saveFooterConfig(footerConfig);
           saveDiffConfig(diffConfig);
           saveNotifyConfig(notifyConfig);
+          saveSubagentConfig(subagentConfig);
           done(undefined);
           return;
         }

@@ -3,9 +3,12 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { getBus, Events } from "@pi-archimedes/core/bus";
 import type { AgentConfig } from "./agents.js";
+import { encodeLimitsEnvironment, SUBAGENT_LIMITS_ENV } from "./limits.js";
+import type { SubagentLimits } from "./types.js";
 
 export interface SpawnOptions {
   task: string;
@@ -14,6 +17,7 @@ export interface SpawnOptions {
   cwd: string | undefined;
   signal: AbortSignal | undefined;
   agent: AgentConfig | undefined;
+  limits: SubagentLimits | undefined;
 }
 
 /**
@@ -164,6 +168,69 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
   return { socketPath, cleanup };
 }
 
+export function buildSubagentArgs(
+  options: SpawnOptions,
+  childGuardPath = fileURLToPath(new URL("./child-guard.ts", import.meta.url)),
+): string[] {
+  const args: string[] = ["--mode", "json", "--no-session", "-p"];
+  const model = options.agent?.model ?? options.model ?? options.activeModel;
+  if (model) args.push("--model", model);
+  if (options.agent?.thinking) args.push("--thinking", options.agent.thinking);
+  if (options.agent?.tools && options.agent.tools.length > 0) {
+    args.push("--tools", options.agent.tools.join(","));
+  }
+
+  const systemPrompt = options.agent?.systemPrompt?.trim();
+  if (systemPrompt) args.push("--system-prompt", systemPrompt);
+
+  // Load only the dedicated guard entry explicitly. This keeps bounded execution
+  // working when the parent package came from a one-off `--extension` path.
+  if (options.limits) args.push("--extension", childGuardPath);
+  args.push(options.task);
+  return args;
+}
+
+export function buildSpawnEnvironment(
+  socketPath: string,
+  limits: SubagentLimits | undefined,
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnvironment, PI_SUBAGENT_SOCKET: socketPath };
+  delete env[SUBAGENT_LIMITS_ENV];
+  if (limits) env[SUBAGENT_LIMITS_ENV] = encodeLimitsEnvironment(limits);
+  return env;
+}
+
+export function buildSpawnInvocation(
+  piBinary: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  const useNode = platform === "win32" && piBinary !== "pi";
+  return {
+    command: useNode ? process.execPath : piBinary,
+    args: useNode ? [piBinary, ...args] : args,
+  };
+}
+
+export function terminateChild(child: ChildProcess, graceMs = 3000): void {
+  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  const forceKill = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, graceMs);
+  forceKill.unref();
+  child.once("exit", () => clearTimeout(forceKill));
+}
+
+// ponytail: short drain grace preserves final JSON; use explicit child IPC ack if 250ms proves insufficient.
+export function scheduleTerminateChild(child: ChildProcess, drainMs = 250): void {
+  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) return;
+  const timer = setTimeout(() => terminateChild(child), drainMs);
+  timer.unref();
+  child.once("exit", () => clearTimeout(timer));
+}
+
 /**
  * Spawn a subagent as a fresh `pi --mode json --no-session -p <task>` process.
  *
@@ -173,79 +240,23 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
 export function spawnSubagent(options: SpawnOptions): ChildProcess {
   const piBinary = resolvePiBinary();
   const agentName = options.agent?.name ?? "general";
-
-  // Start ask bridge socket before spawning so the env var is ready
   const { socketPath, cleanup: cleanupSocket } = startAskSocketServer(agentName);
+  const invocation = buildSpawnInvocation(piBinary, buildSubagentArgs(options));
 
-  // Build CLI args
-  const args: string[] = ["--mode", "json", "--no-session", "-p"];
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: options.cwd || process.cwd(),
+    env: buildSpawnEnvironment(socketPath, options.limits),
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
 
-  // Model: agent.model > options.model > options.activeModel
-  const model = options.agent?.model ?? options.model ?? options.activeModel;
-  if (model) {
-    args.push("--model", model);
-  }
-
-  // Thinking level from agent config
-  if (options.agent?.thinking) {
-    args.push("--thinking", options.agent.thinking);
-  }
-
-  // Tool allowlist from agent config
-  if (options.agent?.tools && options.agent.tools.length > 0) {
-    args.push("--tools", options.agent.tools.join(","));
-  }
-
-  // Always exclude the subagent tool itself to prevent infinite recursion
-  args.push("--exclude-tools", "subagent");
-
-  // Agent system prompt
-  const systemPrompt = options.agent?.systemPrompt?.trim();
-  if (systemPrompt) {
-    args.push("--system-prompt", systemPrompt);
-  }
-
-  // The task is the final positional argument
-  args.push(options.task);
-
-  // On Windows, spawn `node <resolved-js-path>` instead of the raw binary.
-  // The resolved path is a .js file which cannot be spawned directly on Windows.
-  // Using process.execPath avoids shell: true (no escaping risks, kill() works).
-  const isWindowsResolved = process.platform === "win32" && piBinary !== "pi";
-
-  const child = spawn(
-    isWindowsResolved ? process.execPath : piBinary,
-    [
-      ...(isWindowsResolved ? [piBinary] : []),
-      ...args,
-    ],
-    {
-      cwd: options.cwd || process.cwd(),
-      env: {
-        ...process.env,
-        PI_SUBAGENT_SOCKET: socketPath,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    },
-  );
-
-  // Clean up socket server when child exits
   child.on("exit", cleanupSocket);
   child.on("error", cleanupSocket);
 
-  // Handle abort signal
   if (options.signal) {
-    const abortHandler = () => {
-      if (child.pid && !child.killed) {
-        child.kill("SIGTERM");
-        const forceKill = setTimeout(() => {
-          if (!child.killed) child.kill("SIGKILL");
-        }, 3000);
-        forceKill.unref();
-      }
-    };
-    options.signal.addEventListener("abort", abortHandler, { once: true });
+    const abortHandler = () => terminateChild(child);
+    if (options.signal.aborted) abortHandler();
+    else options.signal.addEventListener("abort", abortHandler, { once: true });
     child.on("exit", () => options.signal!.removeEventListener("abort", abortHandler));
   }
 

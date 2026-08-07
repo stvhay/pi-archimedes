@@ -44,6 +44,7 @@ export function truncLine(text: string, maxLen: number): string {
 export interface StatsData {
   turns: number | undefined;
   toolCount: number | undefined;
+  turnTokens?: number | undefined;
   tokens: number | undefined;
   durationMs: number | undefined;
   cost: number | undefined;
@@ -66,7 +67,11 @@ export function buildStatsLine(
 
   if (turns > 0) parts.push("⟳ " + turns);
   if (tools > 0) parts.push(tools + " tool" + (tools !== 1 ? "s" : ""));
-  if (tokens > 0) parts.push(formatTokens(tokens) + " tok");
+  if (tokens > 0) {
+    parts.push(turns > 1 && data.turnTokens !== undefined
+      ? `${formatTokens(data.turnTokens)} turn / ${formatTokens(tokens)} total tok`
+      : formatTokens(tokens) + " tok");
+  }
   if (duration > 0) parts.push(formatDuration(duration));
   if (cost > 0) parts.push(formatCost(cost));
 
