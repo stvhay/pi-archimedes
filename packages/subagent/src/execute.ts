@@ -4,7 +4,7 @@ import { emitCostUpdate } from "./cost.js";
 import { addUsage, fromSubagentUsage } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.js";
-import type { SubagentLimits, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
+import type { ResolvedChildExecution, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
 
 export interface ExecutionControl {
   signal: AbortSignal;
@@ -37,7 +37,7 @@ export interface ExecuteOptions {
   cwd: string | undefined;
   signal: AbortSignal | undefined;
   onUpdate: ((progress: SubagentProgress) => void) | undefined;
-  limits?: SubagentLimits;
+  execution: ResolvedChildExecution;
 }
 
 export type ParallelTask = Omit<ExecuteOptions, "signal" | "onUpdate">;
@@ -64,8 +64,8 @@ export function applyControlTermination(
       error,
       termination: {
         reason: "time-limit",
-        ...(options.limits?.maxDurationMs !== undefined
-          ? { limit: options.limits.maxDurationMs }
+        ...(options.execution.limits?.maxDurationMs !== undefined
+          ? { limit: options.execution.limits.maxDurationMs }
           : {}),
         observed: durationMs,
         usageState: result.finalOutput ? "partial" : "unknown",
@@ -95,7 +95,7 @@ export function applyControlTermination(
 export async function executeSubagent(options: ExecuteOptions): Promise<SubagentResult> {
   const agentName = options.agent ?? "subagent";
   const startTime = Date.now();
-  const control = createExecutionControl(options.signal, options.limits?.maxDurationMs);
+  const control = createExecutionControl(options.signal, options.execution.limits?.maxDurationMs);
 
   // Track previously emitted values to only emit deltas
   let lastEmittedInput = 0;
@@ -112,7 +112,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       cwd: options.cwd,
       signal: control.signal,
       agent: options.agentConfig,
-      limits: options.limits,
+      execution: options.execution,
     });
 
     const result = await streamEvents(child, {

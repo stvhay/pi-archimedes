@@ -2,6 +2,29 @@ import type { Usage } from "@earendil-works/pi-ai";
 
 export const MAX_SUBAGENT_DURATION_MS = 2_147_483_647;
 
+export const SUBAGENT_EXECUTION_MODES = ["agentic", "one-shot"] as const;
+export type SubagentExecutionMode = (typeof SUBAGENT_EXECUTION_MODES)[number];
+
+export const SUBAGENT_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
+
+export interface SubagentExecutionProfile {
+  mode: SubagentExecutionMode;
+  thinking: string | undefined;
+}
+
+export interface ResolvedChildExecution {
+  profile: SubagentExecutionProfile;
+  limits: SubagentLimits | undefined;
+}
+
 export interface SubagentLimits {
   maxProviderRequests?: number;
   maxToolCalls?: number;

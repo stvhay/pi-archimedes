@@ -191,8 +191,41 @@ describe("subagent dispatch policy integration", () => {
 
     expect(executeSubagentMock).toHaveBeenCalledWith(expect.objectContaining({
       cwd: undefined,
-      limits: { maxProviderRequests: 2 },
+      execution: {
+        profile: { mode: "agentic", thinking: undefined },
+        limits: { maxProviderRequests: 2 },
+      },
     }));
+  });
+
+  it("passes one resolved execution plan per parallel child", async () => {
+    executeParallelMock.mockResolvedValue([
+      completedResult("one-shot"),
+      completedResult("agentic"),
+    ]);
+
+    await registeredSubagentTool().execute(
+      "id",
+      {
+        tasks: [
+          { task: "one-shot", mode: "one-shot" },
+          { task: "agentic", mode: "agentic" },
+        ],
+      },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    const tasks = executeParallelMock.mock.calls[0]?.[0].tasks;
+    expect(tasks[0].execution).toEqual({
+      profile: { mode: "one-shot", thinking: undefined },
+      limits: { maxProviderRequests: 1 },
+    });
+    expect(tasks[1].execution).toEqual({
+      profile: { mode: "agentic", thinking: undefined },
+      limits: { maxProviderRequests: 2 },
+    });
   });
 
   it("returns malformed operator config as a structured tool error", async () => {
@@ -209,6 +242,30 @@ describe("subagent dispatch policy integration", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("maxParallel");
     expect(executeSubagentMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects one-shot work with provider retries even without operator limits", async () => {
+    configState.limits = undefined;
+    const cwd = mkdtempSync(join(tmpdir(), "archimedes-one-shot-retry-"));
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({
+      retry: { provider: { maxRetries: 1 } },
+    }));
+
+    try {
+      const result = await registeredSubagentTool().execute(
+        "id",
+        { task: "one", mode: "one-shot", cwd },
+        undefined,
+        undefined,
+        context(cwd),
+      );
+
+      expect(result.content[0]?.text).toContain("retry.provider.maxRetries");
+      expect(executeSubagentMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("rejects bounded work when project provider retries are nonzero", async () => {

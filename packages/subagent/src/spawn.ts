@@ -7,8 +7,9 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { getBus, Events } from "@pi-archimedes/core/bus";
 import type { AgentConfig } from "./agents.js";
+import { ONE_SHOT_SYSTEM_PROMPT } from "./execution-profile.js";
 import { encodeLimitsEnvironment, SUBAGENT_LIMITS_ENV } from "./limits.js";
-import type { SubagentLimits } from "./types.js";
+import type { ResolvedChildExecution, SubagentLimits } from "./types.js";
 
 export interface SpawnOptions {
   task: string;
@@ -17,7 +18,7 @@ export interface SpawnOptions {
   cwd: string | undefined;
   signal: AbortSignal | undefined;
   agent: AgentConfig | undefined;
-  limits: SubagentLimits | undefined;
+  execution: ResolvedChildExecution;
 }
 
 /**
@@ -175,17 +176,26 @@ export function buildSubagentArgs(
   const args: string[] = ["--mode", "json", "--no-session", "-p"];
   const model = options.agent?.model ?? options.model ?? options.activeModel;
   if (model) args.push("--model", model);
-  if (options.agent?.thinking) args.push("--thinking", options.agent.thinking);
-  if (options.agent?.tools && options.agent.tools.length > 0) {
+  const thinking = options.execution.profile.thinking;
+  if (thinking) args.push("--thinking", thinking);
+
+  const mode = options.execution.profile.mode;
+  if (mode === "one-shot") {
+    args.push(
+      "--no-tools",
+      "--no-extensions",
+      "--no-skills",
+      "--no-context-files",
+    );
+  } else if (options.agent?.tools && options.agent.tools.length > 0) {
     args.push("--tools", options.agent.tools.join(","));
   }
 
-  const systemPrompt = options.agent?.systemPrompt?.trim();
+  const systemPrompt = options.agent?.systemPrompt?.trim() ||
+    (mode === "one-shot" ? ONE_SHOT_SYSTEM_PROMPT : undefined);
   if (systemPrompt) args.push("--system-prompt", systemPrompt);
 
-  // Load only the dedicated guard entry explicitly. This keeps bounded execution
-  // working when the parent package came from a one-off `--extension` path.
-  if (options.limits) args.push("--extension", childGuardPath);
+  if (options.execution.limits) args.push("--extension", childGuardPath);
   args.push(options.task);
   return args;
 }
@@ -245,7 +255,7 @@ export function spawnSubagent(options: SpawnOptions): ChildProcess {
 
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.cwd || process.cwd(),
-    env: buildSpawnEnvironment(socketPath, options.limits),
+    env: buildSpawnEnvironment(socketPath, options.execution.limits),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
