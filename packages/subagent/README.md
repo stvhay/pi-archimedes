@@ -11,6 +11,7 @@ Subagent dispatch with live TUI streaming and cost tracking for the [Pi coding a
 - **Cost tracking** — detailed token usage (input, output, cache read/write) and cost per subagent, emitted through the core bus for the footer to consume
 - **Trace correlation** — results expose the ephemeral child's logical Pi session UUID as optional `childSessionId` when Pi emits a valid session event
 - **Execution limits** — optional per-child request, tool, token, cost, and wall-time ceilings with structured stop evidence and preserved partial output
+- **Repeated-error breaker** — stops one child after three consecutive identical failed tool results without affecting siblings
 - **One-shot mode** — one cold provider response from a complete packet, without tools or ambient Pi resources
 - **`/agents` command** — full CRUD TUI for managing agent definitions with model picker, tool picker, and cross-scope collision warnings (available via the meta package)
 
@@ -98,6 +99,8 @@ Bound one child directly:
 Top-level limits apply to every parallel child. A task may add stricter `limits`; it cannot raise operator or top-level ceilings. Results include a structured `termination` reason and preserve finalized or in-flight output and usage when a child is stopped.
 
 Request, tool-call, fanout, and wall-time limits are enforced before additional work. `maxDurationMs` cannot exceed `2,147,483,647`, the maximum safe Node.js timer delay. Token and cost limits use reported assistant usage, so they may exceed the configured value by one provider response. Keep Pi's `retry.provider.maxRetries` at `0` for bounded runs, and use a provider-side account or key cap when a hard spend ceiling is required.
+
+Every child also stops after three consecutive failed tool results with identical tool names, arguments, and result data. A successful result or changed failure resets the sequence. The detector retains only an in-memory SHA-256 fingerprint and reports `repeated-error` termination without exposing that fingerprint.
 
 ### One-shot mode
 

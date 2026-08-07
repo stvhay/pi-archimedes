@@ -22,6 +22,7 @@
 | 18 | [Bounded subagent execution](done/2026-08-06-bounded-subagent-execution.md) | ✅ COMPLETED | 2026-08-06 |
 | 19 | [Subagent one-shot mode](done/2026-08-06-subagent-one-shot-mode.md) | ✅ COMPLETED | 2026-08-06 |
 | 20 | [Parallel result visibility](done/2026-08-07-parallel-result-visibility.md) | ✅ COMPLETED | 2026-08-07 |
+| 21 | [Repeated subagent error breaker](done/2026-08-07-repeated-error-breaker.md) | ✅ COMPLETED | 2026-08-07 |
 
 > **Notes:**
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -29,6 +30,6 @@
 
 ## Quick Stats
 
-- Total Plans: 20
-- Completed: 20
+- Total Plans: 21
+- Completed: 21
 - In Progress: 0
