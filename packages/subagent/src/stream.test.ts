@@ -43,6 +43,41 @@ function assistantEvent(type: "message_update" | "message_end", text: string, in
   };
 }
 
+function writeEvent(child: FakeChild, event: Record<string, unknown>): void {
+  child.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function toolStart(
+  child: FakeChild,
+  id: unknown,
+  args: unknown = { path: "/missing" },
+  toolName = "read",
+): void {
+  writeEvent(child, { type: "tool_execution_start", toolCallId: id, toolName, args });
+}
+
+function toolEnd(
+  child: FakeChild,
+  id: unknown,
+  toolName = "read",
+  isError: unknown = true,
+  result: unknown = { content: [{ type: "text", text: "ENOENT: file not found" }] },
+): void {
+  writeEvent(child, { type: "tool_execution_end", toolCallId: id, toolName, result, isError });
+}
+
+function toolResult(
+  child: FakeChild,
+  id: string,
+  path: string,
+  isError = true,
+  text = "ENOENT: file not found",
+  args: Record<string, unknown> = { path },
+): void {
+  toolStart(child, id, args);
+  toolEnd(child, id, "read", isError, { content: [{ type: "text", text }] });
+}
+
 describe("streamEvents session identity", () => {
   it("returns the logical child Pi session ID", async () => {
     const child = fakeChild();
@@ -68,29 +103,6 @@ describe("streamEvents session identity", () => {
     expect((await pending).childSessionId).toBeUndefined();
   });
 });
-
-function toolResult(
-  child: FakeChild,
-  id: string,
-  path: string,
-  isError = true,
-  text = "ENOENT: file not found",
-  args: Record<string, unknown> = { path },
-): void {
-  child.stdout.write(`${JSON.stringify({
-    type: "tool_execution_start",
-    toolCallId: id,
-    toolName: "read",
-    args,
-  })}\n`);
-  child.stdout.write(`${JSON.stringify({
-    type: "tool_execution_end",
-    toolCallId: id,
-    toolName: "read",
-    result: { content: [{ type: "text", text }] },
-    isError,
-  })}\n`);
-}
 
 describe("streamEvents bounded termination", () => {
   it("preserves in-flight output and usage when a child limit marker arrives", async () => {
@@ -246,16 +258,10 @@ describe("streamEvents bounded termination", () => {
   it("does not group failed results whose start arguments are unavailable", async () => {
     const child = fakeChild();
     const pending = streamEvents(child);
-    const end = {
-      type: "tool_execution_end",
-      toolName: "read",
-      result: { content: [{ type: "text", text: "ENOENT" }] },
-      isError: true,
-    };
-
-    child.stdout.write(`${JSON.stringify({ ...end, toolCallId: "call-1" })}\n`);
-    child.stdout.write(`${JSON.stringify({ ...end, toolCallId: "call-2" })}\n`);
-    child.stdout.write(`${JSON.stringify({ ...end, toolCallId: "call-3" })}\n`);
+    const result = { content: [{ type: "text", text: "ENOENT" }] };
+    toolEnd(child, "call-1", "read", true, result);
+    toolEnd(child, "call-2", "read", true, result);
+    toolEnd(child, "call-3", "read", true, result);
     child.emit("close", 0, null);
 
     expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
@@ -266,17 +272,8 @@ describe("streamEvents bounded termination", () => {
     const pending = streamEvents(child);
 
     for (let i = 0; i < 3; i++) {
-      child.stdout.write(`${JSON.stringify({
-        type: "tool_execution_start",
-        toolName: "read",
-        args: { path: "/missing" },
-      })}\n`);
-      child.stdout.write(`${JSON.stringify({
-        type: "tool_execution_end",
-        toolName: "read",
-        result: { content: [{ type: "text", text: "ENOENT" }] },
-        isError: true,
-      })}\n`);
+      toolStart(child, undefined);
+      toolEnd(child, undefined, "read", true, { content: [{ type: "text", text: "ENOENT" }] });
     }
     child.emit("close", 0, null);
 
@@ -289,26 +286,9 @@ describe("streamEvents bounded termination", () => {
 
     toolResult(child, "call-1", "/missing");
     toolResult(child, "call-2", "/missing");
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_end",
-      toolCallId: "orphan",
-      toolName: "read",
-      result: { content: [{ type: "text", text: "ENOENT" }] },
-      isError: true,
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_start",
-      toolCallId: "malformed",
-      toolName: "read",
-      args: { path: "/missing" },
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_end",
-      toolCallId: "malformed",
-      toolName: "read",
-      result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
-      isError: "true",
-    })}\n`);
+    toolEnd(child, "orphan", "read", true, { content: [{ type: "text", text: "ENOENT" }] });
+    toolStart(child, "malformed");
+    toolEnd(child, "malformed", "read", "true");
     toolResult(child, "call-3", "/missing");
     child.emit("exit", 1, null);
     child.emit("close", 1, null);
@@ -321,25 +301,9 @@ describe("streamEvents bounded termination", () => {
     const pending = streamEvents(child);
 
     toolResult(child, "call-1", "/missing-b");
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_start",
-      toolCallId: "duplicate",
-      toolName: "read",
-      args: { path: "/missing-a" },
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_start",
-      toolCallId: "duplicate",
-      toolName: "read",
-      args: { path: "/missing-b" },
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_end",
-      toolCallId: "duplicate",
-      toolName: "read",
-      result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
-      isError: true,
-    })}\n`);
+    toolStart(child, "duplicate", { path: "/missing-a" });
+    toolStart(child, "duplicate", { path: "/missing-b" });
+    toolEnd(child, "duplicate");
     toolResult(child, "call-3", "/missing-b");
     child.emit("close", 0, null);
 
@@ -354,29 +318,12 @@ describe("streamEvents bounded termination", () => {
 
       toolResult(child, "call-1", "/missing");
       toolResult(child, "call-2", "/missing");
-      child.stdout.write(`${JSON.stringify({
-        type: "tool_execution_start",
-        toolCallId: "call-3",
-        toolName: "read",
-        args: { path: "/missing" },
-      })}\n`);
-      child.stdout.write(`${JSON.stringify({
-        type: "tool_execution_end",
-        toolCallId: "call-3",
-        toolName: "write",
-        result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
-        isError: true,
-      })}\n`);
+      toolStart(child, "call-3");
+      toolEnd(child, "call-3", "write");
       vi.advanceTimersByTime(250);
       expect(child.kill).not.toHaveBeenCalled();
 
-      child.stdout.write(`${JSON.stringify({
-        type: "tool_execution_end",
-        toolCallId: "call-3",
-        toolName: "read",
-        result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
-        isError: true,
-      })}\n`);
+      toolEnd(child, "call-3");
       vi.advanceTimersByTime(250);
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       child.emit("exit", 1, null);
@@ -406,24 +353,9 @@ describe("streamEvents bounded termination", () => {
 
     toolResult(child, "call-1", "/missing");
     toolResult(child, "call-2", "/missing");
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_start",
-      toolCallId: "call-3",
-      toolName: "read",
-      args: { path: "/missing" },
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_start",
-      toolCallId: "call-3",
-      toolName: "read",
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_end",
-      toolCallId: "call-3",
-      toolName: "read",
-      result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
-      isError: true,
-    })}\n`);
+    toolStart(child, "call-3");
+    writeEvent(child, { type: "tool_execution_start", toolCallId: "call-3", toolName: "read" });
+    toolEnd(child, "call-3");
     child.emit("close", 0, null);
 
     expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
@@ -454,19 +386,8 @@ describe("streamEvents bounded termination", () => {
     toolResult(child, "call-3", "/missing", true, "ENOENT", { path: "/missing", deep });
     toolResult(child, "call-4", "/missing");
     toolResult(child, "call-5", "/missing");
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_start",
-      toolCallId: "call-6",
-      toolName: "read",
-      args: { path: "/missing" },
-    })}\n`);
-    child.stdout.write(`${JSON.stringify({
-      type: "tool_execution_end",
-      toolCallId: "call-6",
-      toolName: "read",
-      result: deep,
-      isError: true,
-    })}\n`);
+    toolStart(child, "call-6");
+    toolEnd(child, "call-6", "read", true, deep);
     toolResult(child, "call-7", "/missing");
     child.emit("close", 0, null);
 
@@ -493,11 +414,11 @@ describe("streamEvents bounded termination", () => {
     const pending = streamEvents(child);
 
     for (let i = 0; i <= 1000; i++) {
-      child.stdout.write(`${JSON.stringify({
+      writeEvent(child, {
         type: "tool_execution_start",
         toolCallId: `flood-${i}`,
         toolName: "read",
-      })}\n`);
+      });
     }
     toolResult(child, "call-1", "/missing");
     toolResult(child, "call-2", "/missing");
