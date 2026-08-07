@@ -69,6 +69,29 @@ describe("streamEvents session identity", () => {
   });
 });
 
+function toolResult(
+  child: FakeChild,
+  id: string,
+  path: string,
+  isError = true,
+  text = "ENOENT: file not found",
+  args: Record<string, unknown> = { path },
+): void {
+  child.stdout.write(`${JSON.stringify({
+    type: "tool_execution_start",
+    toolCallId: id,
+    toolName: "read",
+    args,
+  })}\n`);
+  child.stdout.write(`${JSON.stringify({
+    type: "tool_execution_end",
+    toolCallId: id,
+    toolName: "read",
+    result: { content: [{ type: "text", text }] },
+    isError,
+  })}\n`);
+}
+
 describe("streamEvents bounded termination", () => {
   it("preserves in-flight output and usage when a child limit marker arrives", async () => {
     const child = fakeChild();
@@ -148,6 +171,377 @@ describe("streamEvents bounded termination", () => {
       tokens: 12,
     }));
     expect(result.usage).toMatchObject({ input: 7, output: 3, cacheRead: 2, cacheWrite: 0 });
+  });
+
+  it("stops after three identical failed tool results and preserves prior state", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeChild();
+      const pending = streamEvents(child);
+
+      child.stdout.write(`${JSON.stringify(assistantEvent("message_end", "partial answer", 4, 2))}\n`);
+      toolResult(child, "call-1", "/missing");
+      toolResult(child, "call-2", "/missing");
+      toolResult(child, "call-3", "/missing");
+      vi.advanceTimersByTime(250);
+
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      child.emit("exit", null, "SIGTERM");
+      child.emit("close", null, "SIGTERM");
+
+      const result = await pending;
+      expect(result.exitCode).toBe(2);
+      expect(result.finalOutput).toBe("partial answer");
+      expect(result.usage).toMatchObject({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0 });
+      expect(result.termination).toEqual({
+        reason: "repeated-error",
+        limit: 3,
+        observed: 3,
+        usageState: "partial",
+      });
+      expect(result.error).toBe("Subagent stopped: repeated-error");
+      expect(result.termination).not.toHaveProperty("fingerprint");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a new sequence when failed tool input or result changes", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "call-1", "/missing-a");
+    toolResult(child, "call-2", "/missing-a");
+    toolResult(child, "call-3", "/missing-a", true, "EACCES: permission denied");
+    toolResult(child, "call-4", "/missing-b");
+    toolResult(child, "call-5", "/missing-a");
+    toolResult(child, "call-6", "/missing-a");
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("treats reordered object keys as the same failed input", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "call-1", "/missing", true, "ENOENT", {
+      path: "/missing",
+      encoding: "utf8",
+    });
+    toolResult(child, "call-2", "/missing", true, "ENOENT", {
+      encoding: "utf8",
+      path: "/missing",
+    });
+    toolResult(child, "call-3", "/missing", true, "ENOENT", {
+      path: "/missing",
+      encoding: "utf8",
+    });
+    child.emit("exit", 1, null);
+    child.emit("close", 1, null);
+
+    expect((await pending).termination?.reason).toBe("repeated-error");
+  });
+
+  it("does not group failed results whose start arguments are unavailable", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+    const end = {
+      type: "tool_execution_end",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "ENOENT" }] },
+      isError: true,
+    };
+
+    child.stdout.write(`${JSON.stringify({ ...end, toolCallId: "call-1" })}\n`);
+    child.stdout.write(`${JSON.stringify({ ...end, toolCallId: "call-2" })}\n`);
+    child.stdout.write(`${JSON.stringify({ ...end, toolCallId: "call-3" })}\n`);
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("does not group malformed start/end pairs without call IDs", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    for (let i = 0; i < 3; i++) {
+      child.stdout.write(`${JSON.stringify({
+        type: "tool_execution_start",
+        toolName: "read",
+        args: { path: "/missing" },
+      })}\n`);
+      child.stdout.write(`${JSON.stringify({
+        type: "tool_execution_end",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "ENOENT" }] },
+        isError: true,
+      })}\n`);
+    }
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("ignores orphan and malformed end events without resetting a valid streak", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "call-1", "/missing");
+    toolResult(child, "call-2", "/missing");
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "orphan",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "ENOENT" }] },
+      isError: true,
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "malformed",
+      toolName: "read",
+      args: { path: "/missing" },
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "malformed",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
+      isError: "true",
+    })}\n`);
+    toolResult(child, "call-3", "/missing");
+    child.emit("exit", 1, null);
+    child.emit("close", 1, null);
+
+    expect((await pending).termination?.reason).toBe("repeated-error");
+  });
+
+  it("ignores ambiguous duplicate tool-call IDs", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "call-1", "/missing-b");
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "duplicate",
+      toolName: "read",
+      args: { path: "/missing-a" },
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "duplicate",
+      toolName: "read",
+      args: { path: "/missing-b" },
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "duplicate",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
+      isError: true,
+    })}\n`);
+    toolResult(child, "call-3", "/missing-b");
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("ignores a mismatched end tool name without consuming its start", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeChild();
+      const pending = streamEvents(child);
+
+      toolResult(child, "call-1", "/missing");
+      toolResult(child, "call-2", "/missing");
+      child.stdout.write(`${JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "call-3",
+        toolName: "read",
+        args: { path: "/missing" },
+      })}\n`);
+      child.stdout.write(`${JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "call-3",
+        toolName: "write",
+        result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
+        isError: true,
+      })}\n`);
+      vi.advanceTimersByTime(250);
+      expect(child.kill).not.toHaveBeenCalled();
+
+      child.stdout.write(`${JSON.stringify({
+        type: "tool_execution_end",
+        toolCallId: "call-3",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
+        isError: true,
+      })}\n`);
+      vi.advanceTimersByTime(250);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      child.emit("exit", 1, null);
+      child.emit("close", 1, null);
+
+      expect((await pending).termination?.reason).toBe("repeated-error");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not count sequential reuse of a completed tool-call ID", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "reused", "/missing");
+    toolResult(child, "reused", "/missing");
+    toolResult(child, "reused", "/missing");
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("marks a valid pending ID ambiguous when a malformed duplicate start arrives", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "call-1", "/missing");
+    toolResult(child, "call-2", "/missing");
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "call-3",
+      toolName: "read",
+      args: { path: "/missing" },
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "call-3",
+      toolName: "read",
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "call-3",
+      toolName: "read",
+      result: { content: [{ type: "text", text: "ENOENT: file not found" }] },
+      isError: true,
+    })}\n`);
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("ignores failures whose fingerprint input exceeds the depth limit", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+    let deep: unknown = "leaf";
+    for (let i = 0; i < 100; i++) deep = { value: deep };
+
+    toolResult(child, "call-1", "/missing", true, "ENOENT", { path: "/missing", deep });
+    toolResult(child, "call-2", "/missing", true, "ENOENT", { path: "/missing", deep });
+    toolResult(child, "call-3", "/missing", true, "ENOENT", { path: "/missing", deep });
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("breaks an active streak on unhashable arguments or result data", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+    let deep: unknown = "leaf";
+    for (let i = 0; i < 100; i++) deep = { value: deep };
+
+    toolResult(child, "call-1", "/missing");
+    toolResult(child, "call-2", "/missing");
+    toolResult(child, "call-3", "/missing", true, "ENOENT", { path: "/missing", deep });
+    toolResult(child, "call-4", "/missing");
+    toolResult(child, "call-5", "/missing");
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_start",
+      toolCallId: "call-6",
+      toolName: "read",
+      args: { path: "/missing" },
+    })}\n`);
+    child.stdout.write(`${JSON.stringify({
+      type: "tool_execution_end",
+      toolCallId: "call-6",
+      toolName: "read",
+      result: deep,
+      isError: true,
+    })}\n`);
+    toolResult(child, "call-7", "/missing");
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("ignores failures whose fingerprint input exceeds the node limit", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+    const wide = Object.fromEntries(
+      Array.from({ length: 10_001 }, (_, index) => [`key-${index}`, index]),
+    );
+
+    toolResult(child, "call-1", "/missing", true, "ENOENT", wide);
+    toolResult(child, "call-2", "/missing", true, "ENOENT", wide);
+    toolResult(child, "call-3", "/missing", true, "ENOENT", wide);
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("disables correlation after a malformed unique-ID flood", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    for (let i = 0; i <= 1000; i++) {
+      child.stdout.write(`${JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: `flood-${i}`,
+        toolName: "read",
+      })}\n`);
+    }
+    toolResult(child, "call-1", "/missing");
+    toolResult(child, "call-2", "/missing");
+    toolResult(child, "call-3", "/missing");
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("resets the sequence after a successful tool result", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    toolResult(child, "call-1", "/missing");
+    toolResult(child, "call-2", "/missing");
+    toolResult(child, "call-3", "/recovered", false, "contents");
+    toolResult(child, "call-4", "/missing");
+    toolResult(child, "call-5", "/missing");
+    child.emit("close", 0, null);
+
+    expect((await pending).termination).toEqual({ reason: "completed", usageState: "complete" });
+  });
+
+  it("does not stop a sibling when one child repeats an error", async () => {
+    const failedChild = fakeChild();
+    const sibling = fakeChild();
+    const failed = streamEvents(failedChild);
+    const completed = streamEvents(sibling);
+
+    toolResult(failedChild, "call-1", "/missing");
+    toolResult(failedChild, "call-2", "/missing");
+    toolResult(failedChild, "call-3", "/missing");
+    failedChild.emit("exit", 1, null);
+    failedChild.emit("close", 1, null);
+
+    sibling.stdout.write(`${JSON.stringify(assistantEvent("message_end", "sibling complete", 2, 1))}\n`);
+    sibling.emit("close", 0, null);
+
+    expect((await failed).termination?.reason).toBe("repeated-error");
+    expect(await completed).toMatchObject({
+      exitCode: 0,
+      finalOutput: "sibling complete",
+      termination: { reason: "completed", usageState: "complete" },
+    });
   });
 
   it("keeps ordinary stderr as the process error", async () => {
