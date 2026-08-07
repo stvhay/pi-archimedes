@@ -114,7 +114,7 @@ Optional operator defaults live under `archimedes.subagent` in `~/.pi/agent/sett
 }
 ```
 
-Malformed configured limits fail before any child is spawned. The subagent package requires `@earendil-works/pi-coding-agent` 0.77.0 or newer because it uses the `--exclude-tools` CLI option. Native nested tool-usage accounting is consumed by Pi versions that support it; all supported versions retain usage in `details.results` and Archimedes cost events.
+Malformed configured limits fail before any child is spawned. The subagent package requires `@earendil-works/pi-coding-agent` 0.74.0 or newer. Spawned children carry `PI_SUBAGENT_SOCKET`, which prevents this package from registering delegation tools recursively without relying on newer Pi CLI flags. Native nested tool-usage accounting is consumed by Pi versions that support it; all supported versions retain usage in `details.results` and Archimedes cost events.
 
 ### As a command
 
