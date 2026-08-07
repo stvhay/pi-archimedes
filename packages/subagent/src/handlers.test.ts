@@ -81,6 +81,25 @@ describe("assistant event handling", () => {
     expect(state.partialUsage.totalTokens).toBe(0);
   });
 
+  it("bounds Pi 0.84 live delta reconstruction", () => {
+    const state = streamState();
+
+    for (let index = 0; index < 12_000; index++) {
+      handleMessageUpdate(state, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x" },
+      } as Parameters<typeof handleMessageUpdate>[1]);
+    }
+    const changed = handleMessageUpdate(state, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ignored" },
+    } as Parameters<typeof handleMessageUpdate>[1]);
+
+    expect(changed).toBe(false);
+    expect(state.streamingOutput).toHaveLength(12_000);
+    expect(state.streamingParts.get(0)?.content).toHaveLength(12_000);
+  });
+
   it("captures the model from a Pi 0.84 assistant message start", () => {
     const state = streamState();
 

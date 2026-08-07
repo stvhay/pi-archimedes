@@ -20,6 +20,7 @@ const ARGS_PREVIEW_MAX = 120;
 const TOOL_CALLS_MAX = 50;
 const RECENT_OUTPUT_MAX = 50;
 const STREAMING_PARTS_MAX = 50;
+const STREAMING_OUTPUT_MAX_CHARS = 12_000;
 
 /**
  * Extract a short args preview from tool arguments.
@@ -169,7 +170,7 @@ function renderStreamingParts(state: StreamState): string | undefined {
     .map(([, part]) => part)
     .filter((part) => part.content.trim())
     .map((part) => part.type === "thinking" ? `[thinking] ${part.content.trim()}` : part.content);
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
+  return parts.length > 0 ? parts.join("\n\n").slice(0, STREAMING_OUTPUT_MAX_CHARS) : undefined;
 }
 
 function updateStreamingPart(
@@ -178,14 +179,20 @@ function updateStreamingPart(
   type: "text" | "thinking",
   content: string,
   replace: boolean,
-): void {
+): boolean {
   const existing = state.streamingParts.get(index);
-  if (!existing && state.streamingParts.size >= STREAMING_PARTS_MAX) return;
-  state.streamingParts.set(index, {
-    type,
-    content: replace ? content : `${existing?.type === type ? existing.content : ""}${content}`,
-  });
+  if (!existing && state.streamingParts.size >= STREAMING_PARTS_MAX) return false;
+  const otherChars = [...state.streamingParts.entries()].reduce(
+    (total, [partIndex, part]) => total + (partIndex === index ? 0 : part.content.length),
+    0,
+  );
+  const previous = existing?.type === type ? existing.content : "";
+  const next = (replace ? content : `${previous}${content}`)
+    .slice(0, Math.max(0, STREAMING_OUTPUT_MAX_CHARS - otherChars));
+  if (existing?.type === type && existing.content === next) return false;
+  state.streamingParts.set(index, { type, content: next });
   state.streamingOutput = renderStreamingParts(state);
+  return true;
 }
 
 /** Reset replaceable assistant state when a new assistant message starts. */
@@ -196,37 +203,40 @@ export function handleMessageStart(state: StreamState, event: MessageStartEvent)
 }
 
 /** Handle the latest in-flight assistant message as replaceable partial state. */
-export function handleMessageUpdate(state: StreamState, event: MessageUpdateEvent): void {
+export function handleMessageUpdate(state: StreamState, event: MessageUpdateEvent): boolean {
   const message = event.message;
   if (message && typeof message === "object" && (message as { role?: unknown }).role === "assistant") {
     const assistant = message as AssistantMessage;
-    if (!hasAssistantStreamData(assistant)) return;
+    if (!hasAssistantStreamData(assistant)) return false;
     if (!state.model && assistant.model) state.model = assistant.model;
     state.streamingParts.clear();
-    state.streamingOutput = assistantText(assistant);
+    state.streamingOutput = assistantText(assistant)?.slice(0, STREAMING_OUTPUT_MAX_CHARS);
     state.partialUsage = readUsage(assistant.usage);
-    return;
+    return true;
   }
 
   const update = event.assistantMessageEvent;
-  if (!update || typeof update !== "object" || Array.isArray(update)) return;
+  if (!update || typeof update !== "object" || Array.isArray(update)) return false;
   const delta = update as Record<string, unknown>;
   const index = delta.contentIndex;
-  if (!Number.isSafeInteger(index) || (index as number) < 0) return;
+  if (!Number.isSafeInteger(index) || (index as number) < 0) return false;
 
   const eventType = delta.type;
   const type = typeof eventType === "string" && eventType.startsWith("thinking_") ? "thinking"
     : typeof eventType === "string" && eventType.startsWith("text_") ? "text"
     : undefined;
-  if (!type || typeof eventType !== "string") return;
+  if (!type || typeof eventType !== "string") return false;
 
   if (eventType.endsWith("_start")) {
-    updateStreamingPart(state, index as number, type, "", true);
-  } else if (eventType.endsWith("_delta") && typeof delta.delta === "string") {
-    updateStreamingPart(state, index as number, type, delta.delta, false);
-  } else if (eventType.endsWith("_end") && typeof delta.content === "string") {
-    updateStreamingPart(state, index as number, type, delta.content, true);
+    return updateStreamingPart(state, index as number, type, "", true);
   }
+  if (eventType.endsWith("_delta") && typeof delta.delta === "string") {
+    return updateStreamingPart(state, index as number, type, delta.delta, false);
+  }
+  if (eventType.endsWith("_end") && typeof delta.content === "string") {
+    return updateStreamingPart(state, index as number, type, delta.content, true);
+  }
+  return false;
 }
 
 /**

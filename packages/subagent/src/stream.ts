@@ -339,8 +339,7 @@ export function streamEvents(
           break;
         }
         case "message_update": {
-          handleMessageUpdate(state, event);
-          emitProgress();
+          if (handleMessageUpdate(state, event)) emitProgress();
           break;
         }
         case "message_end": {
