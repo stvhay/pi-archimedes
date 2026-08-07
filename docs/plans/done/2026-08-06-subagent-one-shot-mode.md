@@ -8,20 +8,20 @@
 
 **Goal:** Add a cold, bounded subagent mode that treats the task as a complete packet and can replace interactive uses of `agnt invoke --one-shot`.
 
-**Architecture:** Extend single and parallel task inputs with additive `mode` and `thinking` fields. Resolve each child's execution profile before dispatch. `one-shot` forces one provider request and a 180-second default deadline through the limits contract, launches Pi without tools, discovered extensions, skills, project context, or prompt templates, and reloads only the dedicated child guard. Existing `agentic` behavior remains the default. Pi 0.78.0's CLI flags and explicit-extension exception were verified with a no-model-call subprocess smoke before implementation.
+**Architecture:** Extend single and parallel task inputs with additive `mode` and `thinking` fields. Resolve each child's execution profile before dispatch. `one-shot` forces one provider request through the limits contract, launches Pi without tools, discovered extensions, skills, or project context, and reloads only the dedicated child guard. Explicit `/template arguments` prompt-template macros remain available; ordinary tasks receive no template expansion. Timeout behavior remains identical to `agentic` mode unless caller/operator limits tighten it. Existing `agentic` behavior remains the default. Pi 0.74.0's CLI flags and explicit-extension exception were verified with a no-model-call subprocess smoke before implementation.
 
 **Public Contract:**
 - `mode?: "agentic" | "one-shot"` is accepted at the top level and per parallel task; task mode overrides top-level mode.
 - `thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"` is accepted at the top level and per parallel task; task thinking overrides top-level thinking, while explicit agent frontmatter remains authoritative.
 - `one-shot` uses a minimal packet-only system prompt unless a selected agent supplies an explicit system prompt.
-- Caller/operator limits may tighten one-shot's one-request and 180-second limits but cannot raise them.
+- The one-request limit is immutable. Caller/operator `maxDurationMs` limits remain optional and compose exactly as they do for agentic children.
 - One-shot rejects nonzero `retry.provider.maxRetries` through the existing bounded-run policy.
 - Isolation covers discovered Pi resources and tools, not inherited process environment, provider credentials, or ordinary Pi settings. Selected agent frontmatter may supply model, thinking, and system prompt, but its tool/context/skill inheritance fields cannot override one-shot CLI flags.
 
 **Acceptance Criteria:**
 - [ ] Omitted mode preserves current agentic spawn arguments and behavior.
-- [ ] One-shot children receive `--no-tools`, `--no-extensions`, `--no-skills`, `--no-context-files`, and `--no-prompt-templates`, while the dedicated child guard remains explicitly loaded.
-- [ ] One-shot permits at most one provider request and defaults to a 180-second deadline.
+- [ ] One-shot children receive `--no-tools`, `--no-extensions`, `--no-skills`, and `--no-context-files`, while explicit prompt-template macros remain available and the dedicated child guard remains explicitly loaded.
+- [ ] One-shot permits at most one provider request and otherwise retains agentic timeout behavior.
 - [ ] Explicit thinking reaches the child with documented precedence.
 - [ ] Single and parallel inputs expose identical mode/thinking fields; task overrides do not reorder results.
 - [ ] Output, usage, cancellation, structured termination, Windows invocation shape, and agentic children remain compatible.
@@ -71,7 +71,7 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 - Modify: `packages/subagent/src/execute.ts`
 
 **Steps:**
-1. Add failing exact-argv tests for agentic compatibility, one-shot isolation flags, explicit guard loading, thinking precedence, and agent system-prompt precedence. Add a subprocess compatibility test proving Pi 0.78.0 loads an explicit extension while discovery and other resources are disabled.
+1. Add failing exact-argv tests for agentic compatibility, one-shot isolation flags, explicit prompt-template opt-in, explicit guard loading, thinking precedence, and agent system-prompt precedence. Add a subprocess compatibility test proving Pi 0.74.0 loads an explicit extension while discovery and other resources are disabled.
 2. Pass the resolved profile through execute options.
 3. Build one-shot arguments without honoring agent tool allowlists; retain model selection and Windows command construction.
 4. Run focused tests and package typecheck.
@@ -84,7 +84,7 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 
 ### Task 3: Wire single and parallel policy [Depends on: Tasks 1 and 2]
 
-**Context:** Resolve mode, thinking, and built-in one-shot limits per child before provider-retry validation and spawn. Preserve task ordering and existing progress contracts.
+**Context:** Resolve mode, thinking, and the built-in one-shot request limit per child before provider-retry validation and spawn. Preserve task ordering and existing progress contracts.
 
 **Files:**
 - Modify: `packages/subagent/src/index.ts`
@@ -122,7 +122,7 @@ corepack pnpm --filter pi-archimedes exec tsc --noEmit
 
 ## File Conflicts
 
-Tasks share `index.ts` and profile plumbing, so execute serially. This branch is intentionally stacked on the bounded-execution candidate because one-shot request/deadline enforcement reuses that public contract.
+Tasks share `index.ts` and profile plumbing, so execute serially. This branch is intentionally stacked on the bounded-execution candidate because one-shot request enforcement and optional caller/operator deadlines reuse that public contract.
 
 ## Execution Handoff
 

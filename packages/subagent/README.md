@@ -110,15 +110,16 @@ Use `one-shot` for a complete read-only packet that needs one model response wit
 
 One-shot mode:
 
-- allows one provider request and defaults to a 180-second deadline;
-- disables tools, discovered extensions, skills, context files, prompt templates, and session persistence;
+- allows one provider request and otherwise uses the same timeout behavior as agentic mode;
+- disables tools, discovered extensions, skills, context files, and session persistence;
+- allows explicit `/template arguments` prompt-template macros without injecting templates into ordinary tasks;
 - explicitly reloads only Archimedes' child execution guard;
 - uses a packet-only system prompt unless a selected agent supplies one;
 - preserves the normal result, usage, cancellation, and termination shapes.
 
 `mode` and `thinking` are also accepted on each parallel task. Task values override top-level values; selected agent frontmatter remains authoritative for model, thinking, and system prompt. Agent tool and inherited-resource settings cannot override one-shot isolation flags.
 
-Process environment, provider credentials, and ordinary Pi settings remain inherited. Nonzero `retry.provider.maxRetries` is rejected because it would violate the one-request contract. Headless scripts and durable run-bundle workers remain outside this interactive tool mode.
+Process environment, provider credentials, and ordinary Pi settings remain inherited. Nonzero `retry.provider.maxRetries` is rejected because it would violate the one-request contract. Provider timeout settings, parent cancellation, and optional `maxDurationMs` limits behave as they do in agentic mode. Headless scripts and durable run-bundle workers remain outside this interactive tool mode.
 
 ### Settings
 
