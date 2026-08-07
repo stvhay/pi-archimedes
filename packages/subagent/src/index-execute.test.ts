@@ -110,6 +110,74 @@ describe("subagent dispatch policy integration", () => {
     expect(executeParallelMock).not.toHaveBeenCalled();
   });
 
+  it("returns parallel child outputs in stable order", async () => {
+    executeParallelMock.mockResolvedValue([
+      { ...completedResult("one"), finalOutput: "ALPHA" },
+      { ...completedResult("two"), exitCode: 1, finalOutput: undefined, error: "BETA failed" },
+    ]);
+
+    const result = await registeredSubagentTool().execute(
+      "id",
+      { tasks: [{ task: "one" }, { task: "two" }] },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    expect(result.content.slice(1).map((part: { text: string }) => part.text)).toEqual([
+      "Child 1 output:\nALPHA",
+      "Child 2 output:\nBETA failed",
+    ]);
+    expect(result.details.results.map((child: SubagentResult) => child.task)).toEqual(["one", "two"]);
+  });
+
+  it("bounds complete parallel output messages across large fanout", async () => {
+    configState.maxParallel = 200;
+    const tasks = Array.from({ length: 200 }, (_, index) => ({ task: `task-${index}` }));
+    executeParallelMock.mockResolvedValue(tasks.map(({ task }, index) => ({
+      ...completedResult(task),
+      finalOutput: `${index}:` + "X".repeat(200),
+    })));
+
+    const result = await registeredSubagentTool().execute(
+      "id",
+      { tasks },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    const outputs = result.content.slice(1).map((part: { text: string }) => part.text);
+    expect(outputs.length).toBeGreaterThan(0);
+    expect(outputs.reduce((total: number, output: string) => total + output.length, 0)).toBeLessThanOrEqual(12_000);
+    expect(outputs[0]).toMatch(/^Child 1 output:\n0:X+/);
+    expect(result.details.results).toHaveLength(200);
+  });
+
+  it("reports omitted outputs when fanout exceeds the visible budget", async () => {
+    configState.maxParallel = 800;
+    const tasks = Array.from({ length: 800 }, (_, index) => ({ task: `task-${index}` }));
+    executeParallelMock.mockResolvedValue(tasks.map(({ task }, index) => ({
+      ...completedResult(task),
+      finalOutput: `${index}:` + "X".repeat(200),
+    })));
+
+    const result = await registeredSubagentTool().execute(
+      "id",
+      { tasks },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    const outputs = result.content.slice(1).map((part: { text: string }) => part.text);
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]).toMatch(/^Child 1 output:\n0:X+/);
+    expect(outputs[0]).toContain("799 later child outputs omitted");
+    expect(outputs[0].length).toBeLessThanOrEqual(12_000);
+    expect(result.details.results).toHaveLength(800);
+  });
+
   it("passes operator default limits into a single child", async () => {
     executeSubagentMock.mockResolvedValue(completedResult("one"));
 

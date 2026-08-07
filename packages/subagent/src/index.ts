@@ -18,6 +18,8 @@ import type {
   SubagentToolResult,
 } from "./types.js";
 
+const PARALLEL_OUTPUT_MAX_CHARS = 12_000;
+
 // ── JSON Schema for tool parameters (TypeBox) ──────────────────────────────
 
 const SubagentLimitsSchema = Type.Object({
@@ -200,7 +202,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
         });
 
         return {
-          content: [{ type: "text", text: formatResultsSummary(results) }],
+          content: [
+            { type: "text", text: formatResultsSummary(results) },
+            ...formatParallelOutputs(results),
+          ],
           details: {
             mode: "parallel",
             results,
@@ -282,7 +287,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         });
 
         return {
-          content: [{ type: "text", text: result.finalOutput ?? result.error ?? "completed" }],
+          content: [{ type: "text", text: resultOutput(result) }],
           details: {
             mode: "single",
             results: [result],
@@ -397,6 +402,10 @@ function formatProgressSummary(progress: SubagentProgress[]): string {
   return lines.join("\n");
 }
 
+function resultOutput(result: SubagentResult): string {
+  return result.finalOutput ?? result.error ?? "completed";
+}
+
 function formatResultsSummary(results: SubagentResult[]): string {
   const lines = results.map((r) => {
     const status = r.exitCode === 0 ? "✓" : "✗";
@@ -406,6 +415,35 @@ function formatResultsSummary(results: SubagentResult[]): string {
     return `${status} ${r.agent}${summary ? " " + summary : ""}`;
   });
   return lines.join("\n");
+}
+
+function formatParallelOutputs(results: SubagentResult[]): Array<{ type: "text"; text: string }> {
+  const messageMaxChars = Math.floor(PARALLEL_OUTPUT_MAX_CHARS / Math.max(1, results.length));
+  const suffix = "\n[delegated output truncated]";
+  if (results.length > 0 && messageMaxChars <= `Child ${results.length} output:\n`.length) {
+    const header = "Child 1 output:\n";
+    const omitted = results.length - 1;
+    let notice = `\n[${omitted} later child outputs omitted; complete results remain in details.results]`;
+    const output = resultOutput(results[0]!);
+    let outputChars = PARALLEL_OUTPUT_MAX_CHARS - header.length - notice.length;
+    if (output.length > outputChars) {
+      notice = `\n[delegated output truncated; ${omitted} later child outputs omitted; complete results remain in details.results]`;
+      outputChars = PARALLEL_OUTPUT_MAX_CHARS - header.length - notice.length;
+    }
+    return [{ type: "text", text: `${header}${output.slice(0, Math.max(0, outputChars))}${notice}` }];
+  }
+  return results.flatMap((result, index) => {
+    const header = `Child ${index + 1} output:\n`;
+    const available = messageMaxChars - header.length;
+    if (available <= 0) return [];
+    const output = resultOutput(result);
+    if (output.length <= available) return [{ type: "text" as const, text: `${header}${output}` }];
+    const outputChars = Math.max(0, available - suffix.length);
+    return [{
+      type: "text" as const,
+      text: `${header}${output.slice(0, outputChars)}${outputChars ? suffix : ""}`,
+    }];
+  });
 }
 
 // ── Command registration ────────────────────────────────────────────────────

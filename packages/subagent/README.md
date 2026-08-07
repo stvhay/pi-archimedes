@@ -78,6 +78,8 @@ Parallel mode:
 }
 ```
 
+Parallel tool results include the compact status summary followed by labeled child outputs in task order. The combined child-output text is capped at 12,000 characters; complete results remain available in `details.results`.
+
 Bound one child directly:
 
 ```jsonc
