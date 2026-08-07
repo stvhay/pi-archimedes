@@ -21,7 +21,10 @@ function options() {
     cwd: "/work",
     signal: undefined,
     agent: undefined,
-    limits: { maxProviderRequests: 2 },
+    execution: {
+      profile: { mode: "agentic" as const, thinking: undefined },
+      limits: { maxProviderRequests: 2 },
+    },
   };
 }
 
@@ -52,7 +55,10 @@ describe("bounded spawn", () => {
         tools: ["read", "bash"],
         systemPrompt: "Agent review prompt",
       },
-      profile: { mode: "one-shot", thinking: "high" },
+      execution: {
+        profile: { mode: "one-shot", thinking: "high" },
+        limits: { maxProviderRequests: 1 },
+      },
     }, "/package/src/child-guard.ts");
 
     expect(args).toEqual([
@@ -73,7 +79,10 @@ describe("bounded spawn", () => {
   it("uses the packet-only prompt and explicit thinking without an agent", () => {
     const args = buildSubagentArgs({
       ...options(),
-      profile: { mode: "one-shot", thinking: "low" },
+      execution: {
+        profile: { mode: "one-shot", thinking: "low" },
+        limits: { maxProviderRequests: 1 },
+      },
     }, "/package/src/child-guard.ts");
 
     expect(args).toContain("low");
@@ -99,7 +108,10 @@ describe("bounded spawn", () => {
     const spawnOptions = {
       ...options(),
       model: undefined,
-      profile: { mode: "one-shot" as const, thinking: "low" },
+      execution: {
+        profile: { mode: "one-shot" as const, thinking: "low" },
+        limits: { maxProviderRequests: 1 },
+      },
     };
     const args = buildSubagentArgs(spawnOptions, childGuard);
     args.splice(-1, 0, "--extension", extension);
@@ -108,7 +120,7 @@ describe("bounded spawn", () => {
       const result = spawnSync(process.execPath, [cli, ...args], {
         encoding: "utf8",
         timeout: 10_000,
-        env: buildSpawnEnvironment("unused.sock", spawnOptions.limits, {
+        env: buildSpawnEnvironment("unused.sock", spawnOptions.execution.limits, {
           ...process.env,
           PI_CODING_AGENT_DIR: agentDir,
           PI_OFFLINE: "1",
@@ -123,7 +135,13 @@ describe("bounded spawn", () => {
   });
 
   it("does not load the guard for an unlimited agentic child", () => {
-    const args = buildSubagentArgs({ ...options(), limits: undefined }, "/missing/child-guard.ts");
+    const args = buildSubagentArgs({
+      ...options(),
+      execution: {
+        profile: { mode: "agentic", thinking: undefined },
+        limits: undefined,
+      },
+    }, "/missing/child-guard.ts");
 
     expect(args).not.toContain("--extension");
     expect(args).not.toContain("/missing/child-guard.ts");

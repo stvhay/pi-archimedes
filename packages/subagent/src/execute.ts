@@ -1,11 +1,10 @@
 import { spawnSubagent } from "./spawn.js";
 import { streamEvents } from "./stream.js";
 import { emitCostUpdate } from "./cost.js";
-import { resolveProfileLimits } from "./execution-profile.js";
 import { addUsage, fromSubagentUsage } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.js";
-import type { SubagentExecutionProfile, SubagentLimits, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
+import type { ResolvedChildExecution, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
 
 export interface ExecutionControl {
   signal: AbortSignal;
@@ -38,8 +37,7 @@ export interface ExecuteOptions {
   cwd: string | undefined;
   signal: AbortSignal | undefined;
   onUpdate: ((progress: SubagentProgress) => void) | undefined;
-  limits?: SubagentLimits;
-  profile?: SubagentExecutionProfile;
+  execution: ResolvedChildExecution;
 }
 
 export type ParallelTask = Omit<ExecuteOptions, "signal" | "onUpdate">;
@@ -66,8 +64,8 @@ export function applyControlTermination(
       error,
       termination: {
         reason: "time-limit",
-        ...(options.limits?.maxDurationMs !== undefined
-          ? { limit: options.limits.maxDurationMs }
+        ...(options.execution.limits?.maxDurationMs !== undefined
+          ? { limit: options.execution.limits.maxDurationMs }
           : {}),
         observed: durationMs,
         usageState: result.finalOutput ? "partial" : "unknown",
@@ -95,11 +93,9 @@ export function applyControlTermination(
  * Execute a single subagent — waits for completion before resolving.
  */
 export async function executeSubagent(options: ExecuteOptions): Promise<SubagentResult> {
-  const limits = resolveProfileLimits(options.profile, options.limits);
-  const effectiveOptions: ExecuteOptions = limits === undefined ? options : { ...options, limits };
   const agentName = options.agent ?? "subagent";
   const startTime = Date.now();
-  const control = createExecutionControl(options.signal, limits?.maxDurationMs);
+  const control = createExecutionControl(options.signal, options.execution.limits?.maxDurationMs);
 
   // Track previously emitted values to only emit deltas
   let lastEmittedInput = 0;
@@ -116,8 +112,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       cwd: options.cwd,
       signal: control.signal,
       agent: options.agentConfig,
-      limits,
-      ...(options.profile ? { profile: options.profile } : {}),
+      execution: options.execution,
     });
 
     const result = await streamEvents(child, {
@@ -184,7 +179,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       progressSummary: result.progressSummary
         ? { ...result.progressSummary, durationMs }
         : { toolCount: 0, tokens: 0, durationMs },
-    }, effectiveOptions, control, durationMs);
+    }, options, control, durationMs);
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const durationMs = Date.now() - startTime;
@@ -234,7 +229,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
     // Emit final failure progress so executeParallel's progress slot updates
     // from the pending placeholder to "failed" (prevents stale "Starting..." display).
     options.onUpdate?.(result.progress!);
-    return applyControlTermination(result, effectiveOptions, control, durationMs);
+    return applyControlTermination(result, options, control, durationMs);
   }
 }
 

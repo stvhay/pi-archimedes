@@ -6,7 +6,11 @@ import { Type, type Static } from "typebox";
 import { renderSubagentResult } from "./render.js";
 import { discoverAgents, discoverAgentsAll, findAgent, formatAgentList } from "./agents.js";
 import { validateModel, firstError } from "./model-validation.js";
-import { MAX_SUBAGENT_DURATION_MS } from "./types.js";
+import {
+  MAX_SUBAGENT_DURATION_MS,
+  SUBAGENT_EXECUTION_MODES,
+  SUBAGENT_THINKING_LEVELS,
+} from "./types.js";
 import type {
   SubagentDetails,
   SubagentProgress,
@@ -24,10 +28,10 @@ const SubagentLimitsSchema = Type.Object({
   maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SUBAGENT_DURATION_MS, description: "Maximum wall time in milliseconds for this child" })),
 });
 
-const ExecutionModeSchema = StringEnum(["agentic", "one-shot"] as const, {
+const ExecutionModeSchema = StringEnum(SUBAGENT_EXECUTION_MODES, {
   description: "agentic: normal child with tools and ambient context; one-shot: isolated packet with one provider request",
 });
-const ThinkingLevelSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, {
+const ThinkingLevelSchema = StringEnum(SUBAGENT_THINKING_LEVELS, {
   description: "Child thinking level. Agent frontmatter wins, then task-level, then top-level thinking.",
 });
 
@@ -122,12 +126,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
             agentConfig,
             execution: resolveChildExecution({
               operatorLimits: configuredLimits,
-              topLevelLimits: params.limits,
-              taskLimits: task.limits,
-              topLevelMode: params.mode,
-              taskMode: task.mode,
-              topLevelThinking: params.thinking,
-              taskThinking: task.thinking,
+              topLevel: params,
+              task,
               agentThinking: agentConfig?.thinking,
             }),
           };
@@ -184,8 +184,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             model: task.model,
             activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
             cwd: task.cwd ?? undefined,
-            ...(execution.limits ? { limits: execution.limits } : {}),
-            profile: execution.profile,
+            execution,
           })),
           signal: signal ?? undefined,
           onUpdate: (progress: SubagentProgress[]) => {
@@ -248,9 +247,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         }
         const execution = resolveChildExecution({
           operatorLimits: configuredLimits,
-          topLevelLimits: params.limits,
-          topLevelMode: params.mode,
-          topLevelThinking: params.thinking,
+          topLevel: params,
           agentThinking: agentConfig?.thinking,
         });
         try {
@@ -271,8 +268,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
           cwd: params.cwd ?? undefined,
           signal: signal ?? undefined,
-          ...(execution.limits ? { limits: execution.limits } : {}),
-          profile: execution.profile,
+          execution,
           onUpdate: (progress: SubagentProgress) => {
             onUpdate?.({
               content: [],

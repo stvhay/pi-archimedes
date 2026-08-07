@@ -16,17 +16,15 @@ describe("resolveExecutionProfile", () => {
 
   it("lets a parallel task override top-level mode and thinking", () => {
     expect(resolveExecutionProfile({
-      topLevelMode: "one-shot",
-      taskMode: "agentic",
-      topLevelThinking: "low",
-      taskThinking: "high",
+      topLevel: { mode: "one-shot", thinking: "low" },
+      task: { mode: "agentic", thinking: "high" },
     })).toEqual({ mode: "agentic", thinking: "high" });
   });
 
   it("keeps explicit agent thinking authoritative", () => {
     expect(resolveExecutionProfile({
-      topLevelThinking: "low",
-      taskThinking: "high",
+      topLevel: { thinking: "low" },
+      task: { thinking: "high" },
       agentThinking: "xhigh",
     })).toEqual({ mode: "agentic", thinking: "xhigh" });
   });
@@ -35,9 +33,11 @@ describe("resolveExecutionProfile", () => {
 describe("resolveChildExecution", () => {
   it("composes the one-shot request cap with explicit caller limits", () => {
     expect(resolveChildExecution({
-      topLevelMode: "one-shot",
       operatorLimits: { maxDurationMs: 300_000 },
-      topLevelLimits: { maxProviderRequests: 4, maxDurationMs: 240_000 },
+      topLevel: {
+        mode: "one-shot",
+        limits: { maxProviderRequests: 4, maxDurationMs: 240_000 },
+      },
     })).toEqual({
       profile: { mode: "one-shot", thinking: undefined },
       limits: { maxProviderRequests: 1, maxDurationMs: 240_000 },
@@ -45,15 +45,21 @@ describe("resolveChildExecution", () => {
   });
 
   it("keeps sibling task modes independent", () => {
-    const oneShot = resolveChildExecution({ topLevelMode: "agentic", taskMode: "one-shot" });
-    const agentic = resolveChildExecution({ topLevelMode: "agentic", taskMode: "agentic" });
+    const oneShot = resolveChildExecution({
+      topLevel: { mode: "agentic" },
+      task: { mode: "one-shot" },
+    });
+    const agentic = resolveChildExecution({
+      topLevel: { mode: "agentic" },
+      task: { mode: "agentic" },
+    });
 
     expect(oneShot.limits).toEqual(ONE_SHOT_LIMITS);
     expect(agentic.limits).toBeUndefined();
   });
 
   it("makes one-shot runs reject provider retries", () => {
-    const execution = resolveChildExecution({ taskMode: "one-shot" });
+    const execution = resolveChildExecution({ task: { mode: "one-shot" } });
     expect(() => validateDispatchPolicy(DEFAULT_SUBAGENT_CONFIG, [{
       limits: execution.limits,
       providerMaxRetries: 1,

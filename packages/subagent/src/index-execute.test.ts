@@ -123,8 +123,41 @@ describe("subagent dispatch policy integration", () => {
 
     expect(executeSubagentMock).toHaveBeenCalledWith(expect.objectContaining({
       cwd: undefined,
-      limits: { maxProviderRequests: 2 },
+      execution: {
+        profile: { mode: "agentic", thinking: undefined },
+        limits: { maxProviderRequests: 2 },
+      },
     }));
+  });
+
+  it("passes one resolved execution plan per parallel child", async () => {
+    executeParallelMock.mockResolvedValue([
+      completedResult("one-shot"),
+      completedResult("agentic"),
+    ]);
+
+    await registeredSubagentTool().execute(
+      "id",
+      {
+        tasks: [
+          { task: "one-shot", mode: "one-shot" },
+          { task: "agentic", mode: "agentic" },
+        ],
+      },
+      undefined,
+      undefined,
+      context(process.cwd()),
+    );
+
+    const tasks = executeParallelMock.mock.calls[0]?.[0].tasks;
+    expect(tasks[0].execution).toEqual({
+      profile: { mode: "one-shot", thinking: undefined },
+      limits: { maxProviderRequests: 1 },
+    });
+    expect(tasks[1].execution).toEqual({
+      profile: { mode: "agentic", thinking: undefined },
+      limits: { maxProviderRequests: 2 },
+    });
   });
 
   it("returns malformed operator config as a structured tool error", async () => {

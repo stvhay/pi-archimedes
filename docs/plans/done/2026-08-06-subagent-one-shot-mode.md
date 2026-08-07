@@ -8,7 +8,7 @@
 
 **Goal:** Add a cold, bounded subagent mode that treats the task as a complete packet and can replace interactive uses of `agnt invoke --one-shot`.
 
-**Architecture:** Extend single and parallel task inputs with additive `mode` and `thinking` fields. Resolve each child's execution profile before dispatch. `one-shot` forces one provider request through the limits contract, launches Pi without tools, discovered extensions, skills, or project context, and reloads only the dedicated child guard. Explicit `/template arguments` prompt-template macros remain available; ordinary tasks receive no template expansion. Timeout behavior remains identical to `agentic` mode unless caller/operator limits tighten it. Existing `agentic` behavior remains the default. Pi 0.74.0's CLI flags and explicit-extension exception were verified with a no-model-call subprocess smoke before implementation.
+**Architecture:** Extend single and parallel task inputs with additive `mode` and `thinking` fields. Resolve each child once into a required `ResolvedChildExecution` containing its final profile and limits, then pass that plan unchanged through dispatch, execution, and spawn. `one-shot` forces one provider request through the limits contract, launches Pi without tools, discovered extensions, skills, or project context, and reloads only the dedicated child guard. Explicit `/template arguments` prompt-template macros remain available; ordinary tasks receive no template expansion. Timeout behavior remains identical to `agentic` mode unless caller/operator limits tighten it. Existing `agentic` behavior remains the default. Pi 0.74.0's CLI flags and explicit-extension exception were verified with a no-model-call subprocess smoke before implementation.
 
 **Public Contract:**
 - `mode?: "agentic" | "one-shot"` is accepted at the top level and per parallel task; task mode overrides top-level mode.
@@ -51,8 +51,8 @@ git status --short
 
 **Steps:**
 1. Add failing tests for schema placement, task-over-top-level precedence, agent thinking precedence, and one-shot built-in limits.
-2. Implement profile types, resolution, and the minimal one-shot system prompt.
-3. Add schema fields with exact enum values and descriptions.
+2. Implement one resolved profile/limits plan and the minimal one-shot system prompt; accept top-level and task override objects rather than mirrored scalar parameters.
+3. Derive schema fields and TypeScript unions from shared mode/thinking tuples.
 4. Run focused tests and package typecheck.
 
 **Focused verification:**
@@ -72,8 +72,8 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 
 **Steps:**
 1. Add failing exact-argv tests for agentic compatibility, one-shot isolation flags, explicit prompt-template opt-in, explicit guard loading, thinking precedence, and agent system-prompt precedence. Add a subprocess compatibility test proving Pi 0.74.0 loads an explicit extension while discovery and other resources are disabled.
-2. Pass the resolved profile through execute options.
-3. Build one-shot arguments without honoring agent tool allowlists; retain model selection and Windows command construction.
+2. Pass the required resolved execution plan unchanged through execute and spawn options.
+3. Build one-shot arguments from that plan without honoring agent tool allowlists; retain model selection and Windows command construction.
 4. Run focused tests and package typecheck.
 
 **Focused verification:**
@@ -93,8 +93,8 @@ corepack pnpm --filter @pi-archimedes/subagent exec tsc --noEmit
 
 **Steps:**
 1. Add failing tests proving one-shot limits compose with operator/top-level/task limits, reject nonzero provider retries, and keep sibling modes independent. Reuse the bounded guard's request-N+1, deadline, structured-termination, and partial-output tests as enforcement evidence.
-2. Resolve profiles and limits for single and parallel calls before bounded provider-retry validation.
-3. Pass mode/thinking to each child and return unchanged usage/termination details.
+2. Resolve one execution plan per single or parallel child before bounded provider-retry validation, reusing the prepared agent config.
+3. Pass the plan to each child and return unchanged usage/termination details.
 4. Run all subagent tests and package/meta typechecks.
 
 **Focused verification:**

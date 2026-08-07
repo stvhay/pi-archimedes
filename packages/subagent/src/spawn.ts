@@ -9,7 +9,7 @@ import { getBus, Events } from "@pi-archimedes/core/bus";
 import type { AgentConfig } from "./agents.js";
 import { ONE_SHOT_SYSTEM_PROMPT } from "./execution-profile.js";
 import { encodeLimitsEnvironment, SUBAGENT_LIMITS_ENV } from "./limits.js";
-import type { SubagentExecutionProfile, SubagentLimits } from "./types.js";
+import type { ResolvedChildExecution, SubagentLimits } from "./types.js";
 
 export interface SpawnOptions {
   task: string;
@@ -18,8 +18,7 @@ export interface SpawnOptions {
   cwd: string | undefined;
   signal: AbortSignal | undefined;
   agent: AgentConfig | undefined;
-  limits: SubagentLimits | undefined;
-  profile?: SubagentExecutionProfile;
+  execution: ResolvedChildExecution;
 }
 
 /**
@@ -177,10 +176,10 @@ export function buildSubagentArgs(
   const args: string[] = ["--mode", "json", "--no-session", "-p"];
   const model = options.agent?.model ?? options.model ?? options.activeModel;
   if (model) args.push("--model", model);
-  const thinking = options.profile?.thinking ?? options.agent?.thinking;
+  const thinking = options.execution.profile.thinking;
   if (thinking) args.push("--thinking", thinking);
 
-  const mode = options.profile?.mode ?? "agentic";
+  const mode = options.execution.profile.mode;
   if (mode === "one-shot") {
     args.push(
       "--no-tools",
@@ -196,9 +195,7 @@ export function buildSubagentArgs(
     (mode === "one-shot" ? ONE_SHOT_SYSTEM_PROMPT : undefined);
   if (systemPrompt) args.push("--system-prompt", systemPrompt);
 
-  // One-shot always has an immutable request limit; unlimited agentic runs
-  // keep their existing process shape without loading a no-op guard.
-  if (options.limits || mode === "one-shot") args.push("--extension", childGuardPath);
+  if (options.execution.limits) args.push("--extension", childGuardPath);
   args.push(options.task);
   return args;
 }
@@ -258,7 +255,7 @@ export function spawnSubagent(options: SpawnOptions): ChildProcess {
 
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.cwd || process.cwd(),
-    env: buildSpawnEnvironment(socketPath, options.limits),
+    env: buildSpawnEnvironment(socketPath, options.execution.limits),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
