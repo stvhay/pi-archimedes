@@ -54,6 +54,7 @@ function streamState(): StreamState {
     accumulatedOutput: [],
     streamingOutput: undefined,
     streamingParts: new Map(),
+    outputLimit: undefined,
     recentOutput: [],
     toolCalls: [],
     finalOutput: undefined,

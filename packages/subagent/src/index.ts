@@ -1,14 +1,19 @@
 import { SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, TUI } from "@earendil-works/pi-tui";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { loadSubagentConfig } from "./config.js";
 import { resolveConfiguredLimits, validateDispatchPolicy } from "./dispatch-policy.js";
 import { executeSubagent, executeParallel, aggregateUsage } from "./execute.js";
-import { resolveLimits } from "./limits.js";
+import { resolveChildExecution } from "./execution-profile.js";
 import { renderSubagentResult } from "./render.js";
 import { discoverAgents, discoverAgentsAll, findAgent, formatAgentList } from "./agents.js";
 import { validateModel, firstError } from "./model-validation.js";
-import { MAX_SUBAGENT_DURATION_MS } from "./types.js";
+import {
+  MAX_SUBAGENT_DURATION_MS,
+  SUBAGENT_EXECUTION_MODES,
+  SUBAGENT_THINKING_LEVELS,
+} from "./types.js";
 import type {
   SubagentDetails,
   SubagentProgress,
@@ -24,8 +29,16 @@ const SubagentLimitsSchema = Type.Object({
   maxProviderRequests: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum provider requests for this child" })),
   maxToolCalls: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum tool calls for this child" })),
   maxTotalTokens: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum input, output, and cache tokens for this child" })),
+  maxOutputTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Best-effort provider-native output cap for one-shot children" })),
   maxCostUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Observed cost ceiling in USD; may overshoot by one response" })),
   maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SUBAGENT_DURATION_MS, description: "Maximum wall time in milliseconds for this child" })),
+});
+
+const ExecutionModeSchema = StringEnum(SUBAGENT_EXECUTION_MODES, {
+  description: "agentic: normal child with tools and ambient context; one-shot: isolated packet with one provider request",
+});
+const ThinkingLevelSchema = StringEnum(SUBAGENT_THINKING_LEVELS, {
+  description: "Child thinking level. Agent frontmatter wins, then task-level, then top-level thinking.",
 });
 
 const TaskItem = Type.Object({
@@ -36,6 +49,8 @@ const TaskItem = Type.Object({
   model: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   limits: Type.Optional(SubagentLimitsSchema),
+  mode: Type.Optional(ExecutionModeSchema),
+  thinking: Type.Optional(ThinkingLevelSchema),
 });
 
 const SUBAGENT_PARAMS_SCHEMA = Type.Object({
@@ -58,6 +73,8 @@ const SUBAGENT_PARAMS_SCHEMA = Type.Object({
     description: "Working directory for the subagent",
   })),
   limits: Type.Optional(SubagentLimitsSchema),
+  mode: Type.Optional(ExecutionModeSchema),
+  thinking: Type.Optional(ThinkingLevelSchema),
 });
 
 type SubagentParams = Static<typeof SUBAGENT_PARAMS_SCHEMA>;
@@ -78,7 +95,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     name: "subagent",
     label: "Subagent",
     description:
-      "Delegate tasks to subagents. Provide either 'task' (single) or 'tasks' (parallel). Agent is optional — omit for a config-less run with the parent's model and all tools. Model override is rarely needed; the agent config or parent model is used by default.",
+      "Delegate tasks to subagents. Provide either 'task' (single) or 'tasks' (parallel). Agent is optional — omit for a config-less run with the parent's model and all tools. Use mode 'one-shot' for one isolated response from a complete packet. Model override is rarely needed; the agent config or parent model is used by default.",
     parameters: SUBAGENT_PARAMS_SCHEMA,
 
     async execute(
@@ -100,14 +117,23 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
       // Parallel mode
       if (params.tasks && params.tasks.length > 0) {
-        const taskPlans = params.tasks.map((task) => ({
-          task,
-          agentConfig: task.agent ? findAgent(agents, task.agent) : undefined,
-          limits: resolveLimits(configuredLimits, params.limits, task.limits),
-        }));
+        let taskPlans;
         try {
-          validateDispatchPolicy(config, taskPlans.map(({ task, limits }) => ({
-            limits,
+          taskPlans = params.tasks.map((task) => {
+            const agentConfig = task.agent ? findAgent(agents, task.agent) : undefined;
+            return {
+              task,
+              agentConfig,
+              execution: resolveChildExecution({
+                operatorLimits: configuredLimits,
+                topLevel: params,
+                task,
+                agentThinking: agentConfig?.thinking,
+              }),
+            };
+          });
+          validateDispatchPolicy(config, taskPlans.map(({ task, execution }) => ({
+            limits: execution.limits,
             providerMaxRetries: SettingsManager.create(task.cwd ?? process.cwd())
               .getProviderRetrySettings().maxRetries ?? 0,
           })));
@@ -150,14 +176,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
           };
         }
         const results: SubagentResult[] = await executeParallel({
-          tasks: taskPlans.map(({ task, agentConfig, limits }) => ({
+          tasks: taskPlans.map(({ task, agentConfig, execution }) => ({
             agent: task.agent ?? undefined,
             agentConfig,
             task: task.task,
             model: task.model,
             activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
             cwd: task.cwd ?? undefined,
-            ...(limits ? { limits } : {}),
+            execution,
           })),
           signal: signal ?? undefined,
           onUpdate: (progress: SubagentProgress[]) => {
@@ -221,11 +247,16 @@ export function registerSubagent(pi: ExtensionAPI): void {
             isError: true,
           };
         }
-        const limits = resolveLimits(configuredLimits, params.limits);
+        let execution;
         try {
+          execution = resolveChildExecution({
+            operatorLimits: configuredLimits,
+            topLevel: params,
+            agentThinking: agentConfig?.thinking,
+          });
           const retries = SettingsManager.create(params.cwd ?? process.cwd())
             .getProviderRetrySettings().maxRetries ?? 0;
-          validateDispatchPolicy(config, [{ limits, providerMaxRetries: retries }]);
+          validateDispatchPolicy(config, [{ limits: execution.limits, providerMaxRetries: retries }]);
         } catch (error) {
           return policyError("single", error);
         }
@@ -237,7 +268,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
           cwd: params.cwd ?? undefined,
           signal: signal ?? undefined,
-          ...(limits ? { limits } : {}),
+          execution,
           onUpdate: (progress: SubagentProgress) => {
             onUpdate?.({
               content: [],

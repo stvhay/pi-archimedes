@@ -2,12 +2,43 @@ import type { Usage } from "@earendil-works/pi-ai";
 
 export const MAX_SUBAGENT_DURATION_MS = 2_147_483_647;
 
+export const SUBAGENT_EXECUTION_MODES = ["agentic", "one-shot"] as const;
+export type SubagentExecutionMode = (typeof SUBAGENT_EXECUTION_MODES)[number];
+
+export const SUBAGENT_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
+
 export interface SubagentLimits {
   maxProviderRequests?: number;
   maxToolCalls?: number;
   maxTotalTokens?: number;
+  /** Provider-native output cap accepted only for one-shot children. */
+  maxOutputTokens?: number;
   maxCostUsd?: number;
   maxDurationMs?: number;
+}
+
+export interface SubagentExecutionProfile {
+  mode: SubagentExecutionMode;
+  thinking: string | undefined;
+}
+
+export interface OutputLimitEvidence {
+  requested: number;
+  enforcement: "applied" | "unsupported";
+}
+
+export interface ResolvedChildExecution {
+  profile: SubagentExecutionProfile;
+  limits: SubagentLimits | undefined;
+  outputLimit?: OutputLimitEvidence;
 }
 
 export const SUBAGENT_TERMINATION_REASONS = [
@@ -16,6 +47,7 @@ export const SUBAGENT_TERMINATION_REASONS = [
   "request-limit",
   "tool-limit",
   "token-limit",
+  "output-limit",
   "cost-limit",
   "time-limit",
   "usage-unknown",
@@ -88,6 +120,8 @@ export interface SubagentResult {
   usage: SubagentUsage;
   provider?: string | undefined;
   model: string | undefined;
+  /** Effective child profile, limits, and output-limit enforcement evidence. */
+  execution?: ResolvedChildExecution;
   finalOutput: string | undefined;
   error: string | undefined;
   termination?: SubagentTermination;
@@ -125,6 +159,7 @@ export interface StreamState {
   accumulatedOutput: string[];
   streamingOutput: string | undefined;
   streamingParts: Map<number, { type: "text" | "thinking"; content: string }>;
+  outputLimit: OutputLimitEvidence | undefined;
   recentOutput: string[];
   toolCalls: SubagentToolCall[];
   finalOutput: string | undefined;

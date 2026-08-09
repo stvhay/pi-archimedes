@@ -3,9 +3,11 @@ import { loadConfig, saveConfig } from "@pi-archimedes/core/settings-io";
 import { normalizeLimits } from "./limits.js";
 import type { SubagentLimits } from "./types.js";
 
+type OperatorSubagentLimits = Omit<SubagentLimits, "maxOutputTokens">;
+
 export interface SubagentConfig {
   maxParallel: number;
-  defaultLimits: Required<SubagentLimits>;
+  defaultLimits: Required<OperatorSubagentLimits>;
 }
 
 export const DEFAULT_SUBAGENT_CONFIG: SubagentConfig = {

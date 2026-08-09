@@ -1,12 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
+
+const { spawnSubagentMock, streamEventsMock } = vi.hoisted(() => ({
+  spawnSubagentMock: vi.fn(() => ({})),
+  streamEventsMock: vi.fn(),
+}));
+
+vi.mock("./spawn.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./spawn.js")>(),
+  spawnSubagent: spawnSubagentMock,
+}));
+vi.mock("./stream.js", () => ({ streamEvents: streamEventsMock }));
+
 import {
   aggregateUsage,
   applyControlTermination,
   createExecutionControl,
   executeParallel,
+  executeSubagent,
 } from "./execute.js";
 import type { ExecuteOptions } from "./execute.js";
 import type { SubagentResult } from "./types.js";
+
+const agenticExecution = () => ({
+  profile: { mode: "agentic" as const, thinking: undefined },
+  limits: undefined,
+});
 
 function result(task: string, exitCode: number): SubagentResult {
   return {
@@ -70,7 +88,7 @@ describe("applyControlTermination", () => {
   it("classifies a clean child exit after deadline as time-limit", () => {
     const controlled = applyControlTermination(
       result("clean", 0),
-      { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, limits: { maxDurationMs: 1000 } },
+      { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: { profile: { mode: "agentic", thinking: undefined }, limits: { maxDurationMs: 1000 } } },
       { signal: new AbortController().signal, timedOut: () => true },
       1001,
     );
@@ -84,7 +102,7 @@ describe("applyControlTermination", () => {
     parent.abort();
     const controlled = applyControlTermination(
       result("clean", 0),
-      { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: parent.signal, onUpdate: undefined },
+      { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: parent.signal, onUpdate: undefined, execution: agenticExecution() },
       { signal: parent.signal, timedOut: () => false },
       10,
     );
@@ -106,11 +124,69 @@ describe("aggregateUsage", () => {
   });
 });
 
+describe("executeSubagent", () => {
+  it("passes one resolved execution plan unchanged and preserves output-limit evidence", async () => {
+    const execution = {
+      profile: { mode: "one-shot" as const, thinking: undefined },
+      limits: { maxProviderRequests: 1, maxOutputTokens: 16_384 },
+    };
+    streamEventsMock.mockResolvedValueOnce({
+      ...result("one-shot", 0),
+      execution: {
+        ...execution,
+        outputLimit: { requested: 16_384, enforcement: "unsupported" },
+      },
+    });
+
+    const executed = await executeSubagent({
+      agent: undefined,
+      agentConfig: undefined,
+      task: "one-shot",
+      model: undefined,
+      activeModel: undefined,
+      cwd: undefined,
+      signal: undefined,
+      onUpdate: undefined,
+      execution,
+    });
+
+    expect(spawnSubagentMock).toHaveBeenCalledWith(expect.objectContaining({ execution }));
+    expect(streamEventsMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ execution }));
+    expect(executed.execution).toEqual({
+      ...execution,
+      outputLimit: { requested: 16_384, enforcement: "unsupported" },
+    });
+  });
+
+  it("preserves execution evidence when spawn fails", async () => {
+    spawnSubagentMock.mockImplementationOnce(() => { throw new Error("spawn failed"); });
+    const execution = {
+      profile: { mode: "one-shot" as const, thinking: "high" },
+      limits: { maxProviderRequests: 1, maxOutputTokens: 16_384 },
+    };
+
+    const executed = await executeSubagent({
+      agent: undefined,
+      agentConfig: undefined,
+      task: "one-shot",
+      model: undefined,
+      activeModel: undefined,
+      cwd: undefined,
+      signal: undefined,
+      onUpdate: undefined,
+      execution,
+    });
+
+    expect(executed.execution).toEqual(execution);
+    expect(executed.termination).toMatchObject({ reason: "process-error" });
+  });
+});
+
 describe("executeParallel", () => {
   it("keeps task order and lets a sibling complete after one child stops", async () => {
     const tasks: ExecuteOptions[] = [
-      { agent: undefined, agentConfig: undefined, task: "limited", model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined },
-      { agent: undefined, agentConfig: undefined, task: "success", model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined },
+      { agent: undefined, agentConfig: undefined, task: "limited", model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: agenticExecution() },
+      { agent: undefined, agentConfig: undefined, task: "success", model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: agenticExecution() },
     ];
     const runner = vi.fn(async (options: ExecuteOptions) => {
       if (options.task === "limited") return result(options.task, 2);
