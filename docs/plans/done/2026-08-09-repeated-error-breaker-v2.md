@@ -1,6 +1,6 @@
 # Repeated subagent error breaker on v2.0.1
 
-**Status:** IN PROGRESS
+**Status:** COMPLETED
 **Date:** 2026-08-09
 **Branch:** `rebuild/subagent-repeated-errors-v2`
 **Depends on:** `rebuild/subagent-execution-limits-v2` at `4365aba`
@@ -44,14 +44,14 @@ Document fixed behavior and privacy boundaries. Move this plan to `docs/plans/do
 
 ## Acceptance criteria
 
-- [ ] Exactly three consecutive identical failed tool results stop one child.
-- [ ] Success, changed evidence, and valid unhashable evidence reset the streak.
-- [ ] Malformed, orphan, duplicate, reused, or mismatched events cannot trigger a false match.
-- [ ] Depth, node, and correlation-ID state are bounded without raw retention.
-- [ ] Partial output, usage, childSessionId, model, and structured termination survive.
-- [ ] Siblings complete independently.
-- [ ] Existing bounded and Pi 0.84 delta-stream behavior remains unchanged.
-- [ ] Package and workspace gates pass.
+- [x] Exactly three consecutive identical failed tool results stop one child.
+- [x] Success, changed evidence, and valid unhashable evidence reset the streak.
+- [x] Malformed, orphan, duplicate, reused, or mismatched events cannot trigger a false match.
+- [x] Depth, node, character, serialized-size, and correlation-ID state are bounded without raw retention.
+- [x] Partial output, usage, childSessionId, model, and structured termination survive.
+- [x] Siblings complete independently.
+- [x] Existing bounded and Pi 0.84 delta-stream behavior remains unchanged.
+- [x] Package and workspace gates pass.
 
 ## Out of scope
 
