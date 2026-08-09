@@ -11,6 +11,7 @@ Subagent dispatch with live TUI streaming and cost tracking for the [Pi coding a
 - **Cost tracking** — detailed token usage (input, output, cache read/write) and cost per subagent, emitted through the core bus for the footer to consume
 - **Trace correlation** — results expose the ephemeral child's logical Pi session UUID as optional `childSessionId` when Pi emits a valid session event
 - **Execution limits** — optional per-child request, tool, token, cost, and wall-time ceilings with structured stop evidence and preserved partial output
+- **Repeated-error breaker** — stops one child after three consecutive identical failed tool results without affecting siblings
 - **`/agents` command** — full CRUD TUI for managing agent definitions with model picker, tool picker, and cross-scope collision warnings (available via the meta package)
 
 ## Screenshots
@@ -99,6 +100,8 @@ Top-level limits apply to every parallel child. A task may add stricter `limits`
 Request, tool-call, fanout, and wall-time limits are enforced before additional work. `maxDurationMs` cannot exceed `2,147,483,647`, the maximum safe Node.js timer delay. Token and cost limits use reported assistant usage, so they may exceed the configured value by one provider response. Keep Pi's `retry.provider.maxRetries` at `0` for bounded runs, and use a provider-side account or key cap when a hard spend ceiling is required.
 
 Child output parsing accepts legacy cumulative updates and Pi 0.84 delta-only streams. Live reconstructed previews are capped at 12,000 characters; authoritative final output and usage replace partial state when available. Forced stops still return whatever output and usage the child emitted.
+
+Every child also stops after three consecutive failed tool results with identical tool names, arguments, and result data. A successful result, changed failure, or valid but unhashable evidence resets the sequence. Correlation and canonicalization are bounded; the detector retains only in-memory SHA-256 fingerprints and reports `repeated-error` termination without exposing raw evidence or fingerprints.
 
 ### Settings
 
