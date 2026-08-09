@@ -4,7 +4,7 @@ import { emitCostUpdate } from "./cost.js";
 import { addUsage, fromSubagentUsage } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.js";
-import type { SubagentLimits, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
+import type { ResolvedChildExecution, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
 
 export interface ExecutionControl {
   signal: AbortSignal;
@@ -37,7 +37,18 @@ export interface ExecuteOptions {
   cwd: string | undefined;
   signal: AbortSignal | undefined;
   onUpdate: ((progress: SubagentProgress) => void) | undefined;
-  limits?: SubagentLimits;
+  execution: ResolvedChildExecution;
+}
+
+function executionEvidence(
+  execution: ResolvedChildExecution,
+  outputLimit?: ResolvedChildExecution["outputLimit"],
+): ResolvedChildExecution {
+  return {
+    profile: { ...execution.profile },
+    limits: execution.limits ? { ...execution.limits } : undefined,
+    ...(outputLimit ? { outputLimit: { ...outputLimit } } : {}),
+  };
 }
 
 export type ParallelTask = Omit<ExecuteOptions, "signal" | "onUpdate">;
@@ -64,8 +75,8 @@ export function applyControlTermination(
       error,
       termination: {
         reason: "time-limit",
-        ...(options.limits?.maxDurationMs !== undefined
-          ? { limit: options.limits.maxDurationMs }
+        ...(options.execution.limits?.maxDurationMs !== undefined
+          ? { limit: options.execution.limits.maxDurationMs }
           : {}),
         observed: durationMs,
         usageState: result.finalOutput ? "partial" : "unknown",
@@ -95,7 +106,7 @@ export function applyControlTermination(
 export async function executeSubagent(options: ExecuteOptions): Promise<SubagentResult> {
   const agentName = options.agent ?? "subagent";
   const startTime = Date.now();
-  const control = createExecutionControl(options.signal, options.limits?.maxDurationMs);
+  const control = createExecutionControl(options.signal, options.execution.limits?.maxDurationMs);
 
   // Track previously emitted values to only emit deltas
   let lastEmittedInput = 0;
@@ -112,12 +123,13 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       cwd: options.cwd,
       signal: control.signal,
       agent: options.agentConfig,
-      limits: options.limits,
+      execution: options.execution,
     });
 
     const result = await streamEvents(child, {
       agent: agentName,
       task: options.task,
+      execution: options.execution,
       onProgress: (progress: SubagentProgress) => {
         // Emit only deltas to avoid double-counting in CostAccumulator
         const deltaInput = progress.inputTokens - lastEmittedInput;
@@ -151,6 +163,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       ...result,
       agent: agentName,
       task: options.task,
+      execution: executionEvidence(options.execution, result.execution?.outputLimit),
       progress: result.progress
         ? { ...result.progress, agent: agentName, durationMs }
         : // Defensive: streamEvents should always return a progress, but if not,
@@ -196,6 +209,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
         turns: 0,
       } as SubagentUsage,
       model: undefined,
+      execution: executionEvidence(options.execution),
       finalOutput: undefined,
       error: errorMessage,
       termination: { reason: "process-error", usageState: "unknown" },

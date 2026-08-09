@@ -76,6 +76,7 @@ Dispatch work to other agents and watch them work in real time.
 - Parallel execution mode
 - Per-subagent tool counts and current-turn/cumulative token usage
 - Optional request, tool, token, cost, wall-time, and fanout limits
+- Cold one-shot mode with best-effort provider-native output caps
 - Unified cost summary
 - Color-coded tool calls — grey while running, green/red on completion
 - Readable argument previews (no raw JSON)

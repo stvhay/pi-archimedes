@@ -1,6 +1,6 @@
 # Subagent one-shot mode and output caps on v2.0.1
 
-**Status:** IN PROGRESS
+**Status:** COMPLETED
 **Date:** 2026-08-09
 **Branch:** `rebuild/subagent-one-shot-mode-v2`
 **Depends on:** `rebuild/subagent-execution-limits-v2` at `4365aba`
@@ -67,16 +67,16 @@ Add cold one-shot child execution to the bounded v2.0.1 stack. Keep exactly one 
 
 ## Acceptance criteria
 
-- [ ] Omitted mode preserves current agentic behavior.
-- [ ] One-shot makes exactly one provider request and rejects provider retries.
-- [ ] One-shot has no implicit 180-second deadline.
-- [ ] Explicit prompt-template macros remain available; other ambient resources stay disabled.
-- [ ] Known payloads receive the requested or stricter existing cap; unknown payloads run with unsupported evidence.
-- [ ] Provider length stops preserve output/usage and report `output-limit` only when the cap was applied.
-- [ ] Cumulative token/cost limits cannot masquerade as one-shot spend enforcement.
-- [ ] Effective profile, limits, and output-limit enforcement are returned on all result paths.
-- [ ] Agentic and one-shot model labels remain visible without duplicate model-resolution logic.
-- [ ] Package and workspace gates pass.
+- [x] Omitted mode preserves current agentic behavior.
+- [x] One-shot makes exactly one provider request and rejects provider retries.
+- [x] One-shot has no implicit 180-second deadline.
+- [x] Explicit prompt-template macros remain available; other ambient resources stay disabled.
+- [x] Known payloads receive the requested or stricter existing cap; unknown payloads run with unsupported evidence.
+- [x] Provider length stops preserve output/usage and report `output-limit` only when the cap was applied.
+- [x] Cumulative token/cost limits cannot masquerade as one-shot spend enforcement.
+- [x] Effective profile, limits, and output-limit enforcement are returned on all result paths.
+- [x] Agentic and one-shot model labels remain visible without duplicate model-resolution logic.
+- [x] Package and workspace gates pass.
 
 ## Out of scope
 
