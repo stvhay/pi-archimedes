@@ -1,5 +1,11 @@
 # Plans
 
+## In Progress
+
+| # | Plan | Status | Created |
+|---|------|--------|---------|
+| 19 | [Bounded subagent execution on v2.0.1](2026-08-09-bounded-subagent-execution-v2.md) | 🚧 IN PROGRESS | 2026-08-09 |
+
 ## Done
 
 | # | Plan | Status | Created |
@@ -27,6 +33,6 @@
 
 ## Quick Stats
 
-- Total Plans: 17
+- Total Plans: 18
 - Completed: 17
-- In Progress: 0
+- In Progress: 1
