@@ -122,6 +122,7 @@ export function renderCompactSingle(
   const statsData = {
     turns: result.usage.turns ?? 0,
     toolCount: summary.toolCount,
+    turnTokens: progress?.turnTokens,
     tokens: summary.tokens,
     durationMs: liveDuration,
     cost: result.usage.cost ?? 0,
@@ -185,10 +186,13 @@ export function renderCompactParallel(
     const statsData = {
       turns: result.usage.turns ?? 0,
       toolCount: summary.toolCount,
+      turnTokens: progress?.turnTokens,
       tokens: summary.tokens,
       durationMs: summary.durationMs,
       cost: result.usage.cost ?? 0,
     };
+    const modelName = progress?.model ?? result.model;
+    const modelPart = modelName ? `  ${theme.fg("accent", modelName)}` : "";
     const statsLine = buildStatsLine(statsData, theme);
     const statsPart = statsLine ? "  " + statsLine : "";
 
@@ -203,7 +207,7 @@ export function renderCompactParallel(
     };
     const activityLine = buildActivityLine(activityData, theme);
 
-    let line = `${glyphColored} ${buildAgentLabel(agentName, result.task, theme)}${statsPart}`;
+    let line = `${glyphColored} ${buildAgentLabel(agentName, result.task, theme)}${modelPart}${statsPart}`;
     if (activityLine) {
       line += "\n" + activityLine;
     }
@@ -244,8 +248,9 @@ export function renderCompactProgress(
     : progress.durationMs;
 
   const statsData = {
-    turns: 0,
+    turns: progress.turnCount ?? 0,
     toolCount: progress.toolCount,
+    turnTokens: progress.turnTokens,
     tokens: progress.tokens,
     durationMs: liveDuration,
     cost: progress.cost,
@@ -297,12 +302,14 @@ export function renderCompactParallelProgress(
         : theme.fg("muted", glyph);
 
     const statsData = {
-      turns: 0,
+      turns: progress.turnCount ?? 0,
       toolCount: progress.toolCount,
+      turnTokens: progress.turnTokens,
       tokens: progress.tokens,
       durationMs: progress.durationMs,
       cost: progress.cost,
     };
+    const modelPart = progress.model ? `  ${theme.fg("accent", progress.model)}` : "";
     const statsLine = buildStatsLine(statsData, theme);
     const statsPart = statsLine ? "  " + statsLine : "";
 
@@ -317,7 +324,7 @@ export function renderCompactParallelProgress(
     };
     const activityLine = buildActivityLine(activityData, theme);
 
-    let line = `${glyphColored} ${buildAgentLabel(agentName, progress.task, theme)}${statsPart}`;
+    let line = `${glyphColored} ${buildAgentLabel(agentName, progress.task, theme)}${modelPart}${statsPart}`;
     if (activityLine) {
       line += "\n" + activityLine;
     }

@@ -74,7 +74,8 @@ Dispatch work to other agents and watch them work in real time.
 
 - Sub-agent dispatch with live TUI streaming
 - Parallel execution mode
-- Per-subagent tool counts and token usage
+- Per-subagent tool counts and current-turn/cumulative token usage
+- Optional request, tool, token, cost, wall-time, and fanout limits
 - Unified cost summary
 - Color-coded tool calls — grey while running, green/red on completion
 - Readable argument previews (no raw JSON)
@@ -183,7 +184,16 @@ Uses Pi's core `terminal.showImages` setting to control inline previews. No pack
 
 ### [`@pi-archimedes/subagent`](packages/subagent/README.md)
 
-No settings yet. Tool/cost events flow through `@pi-archimedes/core/bus` for the footer to consume.
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `maxParallel` | number | `0` | Maximum children in one parallel call; `0` is unlimited |
+| `defaultLimits.maxProviderRequests` | number | `0` | Per-child provider requests; `0` is unlimited |
+| `defaultLimits.maxToolCalls` | number | `0` | Per-child tool calls; `0` is unlimited |
+| `defaultLimits.maxTotalTokens` | number | `0` | Per-child input, output, and cache tokens; `0` is unlimited |
+| `defaultLimits.maxCostUsd` | number | `0` | Observed per-child cost in USD; `0` is unlimited |
+| `defaultLimits.maxDurationMs` | number | `0` | Per-child wall time in milliseconds; `0` is unlimited, maximum `2,147,483,647` |
+
+Token and cost limits can overshoot by one provider response. Use provider-side account or key limits for a hard spend ceiling.
 
 ### [`@pi-archimedes/ask`](packages/ask/README.md)
 

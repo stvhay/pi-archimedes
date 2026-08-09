@@ -3,7 +3,7 @@
 **Date:** 2026-08-09
 **Branch:** `rebuild/subagent-execution-limits-v2`
 **Base:** `v2.0.1` (`bdfeea3ed77392a2d02617fa1e0d4aa5fd8317e3`)
-**Status:** IN PROGRESS
+**Status:** COMPLETED
 
 ## Goal
 
@@ -62,16 +62,16 @@ Move this plan to `docs/plans/done/`, mark it completed in the index, update roo
 
 ## Acceptance
 
-- [ ] Unlimited agentic behavior remains the default.
-- [ ] Every configured limit validates and only tightens operator ceilings.
-- [ ] Provider retries are rejected for bounded children.
-- [ ] Time/cancel/request/tool/token/cost/unknown-usage stops preserve available output and usage.
-- [ ] Pi 0.74 legacy and Pi 0.84 delta streams both pass.
-- [ ] Native v2.0.1 child session IDs and model validation remain intact.
-- [ ] Effective model is visible in live/completed single/parallel progress.
-- [ ] Parallel parent-visible output is bounded; structured results remain complete.
-- [ ] Adaptive turn tokens preserve one-turn display compatibility.
-- [ ] Package and workspace gates pass.
+- [x] Unlimited agentic behavior remains the default.
+- [x] Every configured limit validates and only tightens operator ceilings.
+- [x] Provider retries are rejected for bounded children.
+- [x] Time/cancel/request/tool/token/cost/unknown-usage stops preserve available output and usage.
+- [x] Pi 0.74 legacy and Pi 0.84 delta streams both pass.
+- [x] Native v2.0.1 child session IDs and model validation remain intact.
+- [x] Effective model is visible in live/completed single/parallel progress.
+- [x] Parallel parent-visible output is bounded; structured results remain complete.
+- [x] Adaptive turn tokens preserve one-turn display compatibility.
+- [x] Package and workspace gates pass.
 
 ## Verification
 

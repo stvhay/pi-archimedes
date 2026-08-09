@@ -2,11 +2,16 @@ import { createInterface } from "node:readline";
 import type { ChildProcess } from "node:child_process";
 import type { StreamState, SubagentProgress, SubagentResult } from "./types.js";
 import { getBus, Events } from "@pi-archimedes/core/bus";
+import { decodeLimitStop } from "./limits.js";
+import { scheduleTerminateChild } from "./spawn.js";
+import { addUsage, readUsage, toSubagentUsage } from "./usage.js";
 import {
   type JsonEvent,
   handleToolStart,
   handleToolEnd,
   handleToolResult,
+  handleMessageStart,
+  handleMessageUpdate,
   handleMessageEnd,
   handleAgentEnd,
 } from "./handlers.js";
@@ -52,49 +57,76 @@ export function streamEvents(
     const state: StreamState = {
       toolCount: 0,
       turnCount: 0,
-      totalInput: 0,
-      totalOutput: 0,
-      totalCacheRead: 0,
-      totalCacheWrite: 0,
-      totalCost: 0,
+      usage: readUsage(undefined),
+      turnUsage: readUsage(undefined),
+      partialUsage: readUsage(undefined),
       currentTool: undefined,
       currentToolArgs: undefined,
       currentToolStartedAt: undefined,
+      provider: undefined,
       model: undefined,
       accumulatedOutput: [],
+      streamingOutput: undefined,
+      streamingParts: new Map(),
       recentOutput: [],
       toolCalls: [],
       finalOutput: undefined,
     };
 
-    // Collect stderr for error reporting
-    const stderrChunks: Buffer[] = [];
-    child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-
+    const stderrLines: string[] = [];
     let error: string | undefined;
+    let termination = undefined as SubagentResult["termination"];
+    if (child.stderr) {
+      const stderrReader = createInterface({ input: child.stderr, crlfDelay: Infinity });
+      stderrReader.on("line", (line) => {
+        const stop = decodeLimitStop(line);
+        if (stop && !termination) {
+          termination = stop;
+          error = `Subagent stopped: ${stop.reason}`;
+          scheduleTerminateChild(child);
+        } else if (!stop) {
+          stderrLines.push(line);
+        }
+      });
+    }
 
-    const buildProgress = (): SubagentProgress => ({
-      agent: callbacks.agent ?? "subagent",
-      status: "running",
-      task: callbacks.task ?? "",
-      currentTool: state.currentTool,
-      currentToolArgs: state.currentToolArgs,
-      currentToolStartedAt: state.currentToolStartedAt,
-      toolCount: state.toolCount,
-      inputTokens: state.totalInput,
-      outputTokens: state.totalOutput,
-      tokens: state.totalInput + state.totalOutput,
-      cost: state.totalCost,
-      durationMs: Date.now() - startTime,
-      error,
-      output:
-        state.accumulatedOutput.length > 0
-          ? state.accumulatedOutput.join("\n\n")
-          : undefined,
-      recentOutput: state.recentOutput.length > 0 ? state.recentOutput : undefined,
-      toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
-      model: state.model,
-    });
+    const observedUsage = () => addUsage(state.usage, state.partialUsage);
+
+    const observedOutput = (): string | undefined => {
+      const parts = [
+        ...state.accumulatedOutput,
+        ...(state.streamingOutput ? [state.streamingOutput] : []),
+      ];
+      return parts.length > 0 ? parts.join("\n\n") : undefined;
+    };
+
+    const buildProgress = (): SubagentProgress => {
+      const usage = observedUsage();
+      const turnUsage = state.partialUsage.totalTokens > 0 ? state.partialUsage : state.turnUsage;
+      return {
+        agent: callbacks.agent ?? "subagent",
+        status: "running",
+        task: callbacks.task ?? "",
+        currentTool: state.currentTool,
+        currentToolArgs: state.currentToolArgs,
+        currentToolStartedAt: state.currentToolStartedAt,
+        toolCount: state.toolCount,
+        turnCount: state.turnCount,
+        turnTokens: turnUsage.totalTokens,
+        inputTokens: usage.input,
+        outputTokens: usage.output,
+        cacheReadTokens: usage.cacheRead,
+        cacheWriteTokens: usage.cacheWrite,
+        tokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+        cost: usage.cost.total,
+        durationMs: Date.now() - startTime,
+        error,
+        output: observedOutput(),
+        recentOutput: state.recentOutput.length > 0 ? state.recentOutput : undefined,
+        toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
+        model: state.model,
+      };
+    };
 
     const emitProgress = () => callbacks.onProgress?.(buildProgress());
 
@@ -158,6 +190,17 @@ export function streamEvents(
         }
         case "turn_start": {
           state.turnCount++;
+          state.turnUsage = readUsage(undefined);
+          state.partialUsage = readUsage(undefined);
+          break;
+        }
+        case "message_start": {
+          handleMessageStart(state, event);
+          emitProgress();
+          break;
+        }
+        case "message_update": {
+          if (handleMessageUpdate(state, event)) emitProgress();
           break;
         }
         case "message_end": {
@@ -169,7 +212,7 @@ export function streamEvents(
           handleAgentEnd(state, event);
           break;
         }
-        // Ignore: agent_start, message_start, message_update, turn_end, tool_execution_update
+        // Ignore: agent_start, turn_end, tool_execution_update
       }
     });
 
@@ -178,30 +221,31 @@ export function streamEvents(
       clearStartupTimer();
       clearInterval(heartbeat);
       const durationMs = Date.now() - startTime;
-      const exitCode = code ?? 1;
+      const exitCode = termination ? 2 : (code ?? 1);
+      const usage = observedUsage();
 
-      // Surface stderr as error if the process failed and we have no other error
       if (exitCode !== 0 && !error) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+        const stderr = stderrLines.join("\n").trim();
         if (stderr) error = stderr;
       }
+      termination ??= exitCode === 0
+        ? { reason: "completed", usageState: "complete" }
+        : {
+          reason: "process-error",
+          usageState: state.streamingOutput ? "partial" : "unknown",
+        };
 
       const result: SubagentResult = {
         agent: callbacks.agent ?? "subagent",
         task: callbacks.task ?? "",
         ...(state.childSessionId ? { childSessionId: state.childSessionId } : {}),
         exitCode,
+        provider: state.provider,
         model: state.model,
-        usage: {
-          input: state.totalInput,
-          output: state.totalOutput,
-          cacheRead: state.totalCacheRead,
-          cacheWrite: state.totalCacheWrite,
-          cost: state.totalCost,
-          turns: state.turnCount,
-        },
-        finalOutput: state.finalOutput,
+        usage: toSubagentUsage(usage, state.turnCount),
+        finalOutput: state.finalOutput ?? observedOutput(),
         error,
+        termination,
         progress: {
           ...buildProgress(),
           status: exitCode === 0 ? "completed" : "failed",
@@ -209,7 +253,7 @@ export function streamEvents(
         },
         progressSummary: {
           toolCount: state.toolCount,
-          tokens: state.totalInput + state.totalOutput,
+          tokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
           durationMs,
         },
       };
