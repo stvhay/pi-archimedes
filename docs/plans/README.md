@@ -1,5 +1,11 @@
 # Plans
 
+## In Progress
+
+| # | Plan | Status | Created |
+|---|------|--------|---------|
+| 20 | [Subagent one-shot mode and output caps on v2.0.1](2026-08-09-subagent-one-shot-output-caps-v2.md) | 🚧 IN PROGRESS | 2026-08-09 |
+
 ## Done
 
 | # | Plan | Status | Created |
@@ -28,6 +34,6 @@
 
 ## Quick Stats
 
-- Total Plans: 18
+- Total Plans: 19
 - Completed: 18
-- In Progress: 0
+- In Progress: 1
