@@ -1,11 +1,5 @@
 # Plans
 
-## In Progress
-
-| # | Plan | Status | Created |
-|---|------|--------|---------|
-| 21 | [Repeated subagent error breaker on v2.0.1](2026-08-09-repeated-error-breaker-v2.md) | 🚧 IN PROGRESS | 2026-08-09 |
-
 ## Done
 
 | # | Plan | Status | Created |
@@ -28,6 +22,7 @@
 | 18 | [Expose subagent Pi session IDs](done/2026-08-05-subagent-session-id.md) | ✅ COMPLETED | 2026-08-05 |
 | 19 | [Bounded subagent execution on v2.0.1](done/2026-08-09-bounded-subagent-execution-v2.md) | ✅ COMPLETED | 2026-08-09 |
 | 20 | [Subagent one-shot mode and output caps on v2.0.1](done/2026-08-09-subagent-one-shot-output-caps-v2.md) | ✅ COMPLETED | 2026-08-09 |
+| 21 | [Repeated subagent error breaker on v2.0.1](done/2026-08-09-repeated-error-breaker-v2.md) | ✅ COMPLETED | 2026-08-09 |
 
 > **Notes:**
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -36,5 +31,5 @@
 ## Quick Stats
 
 - Total Plans: 20
-- Completed: 19
-- In Progress: 1
+- Completed: 20
+- In Progress: 0
