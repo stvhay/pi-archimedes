@@ -125,7 +125,7 @@ One-shot mode:
 
 `mode` and `thinking` are also accepted per parallel task. Task values override top-level values; selected agent frontmatter remains authoritative for model, thinking, and system prompt. Agent tool settings cannot override one-shot isolation.
 
-`maxOutputTokens` is accepted only for one-shot children. The guard clamps known provider payload fields without raising an existing lower cap. Results report the requested cap as `applied` or `unsupported`; unsupported payload shapes still run. When an applied provider cap ends with a `length` stop, the result reports `output-limit` while retaining all emitted output and usage. Cumulative `maxTotalTokens` and `maxCostUsd` are rejected for one-shot because post-response accounting cannot bound its sole call.
+`maxOutputTokens` is accepted only for one-shot children. The guard clamps known provider payload fields without raising an existing lower cap. Results report the requested cap as `applied` or `unsupported`; unsupported payload shapes still run. Pi's Codex Responses payload does not expose a provider output cap and reports `unsupported` rather than sending an invalid field. When an applied provider cap ends with a `length` stop, the result reports `output-limit` while retaining all emitted output and usage. Cumulative `maxTotalTokens` and `maxCostUsd` are rejected for one-shot because post-response accounting cannot bound its sole call.
 
 Process environment, provider credentials, ordinary Pi settings, and prompt-template discovery remain inherited. A provider-side account or key limit remains the only hard spend ceiling. Headless scripts and durable run-bundle workers remain outside this interactive tool mode.
 

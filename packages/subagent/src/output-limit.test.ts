@@ -35,6 +35,26 @@ describe("applyProviderOutputLimit", () => {
     });
   });
 
+  it("leaves Codex Responses payloads unsupported", () => {
+    const payload = {
+      model: "gpt-5.6-sol",
+      store: false,
+      stream: true,
+      instructions: "Reply once.",
+      input: [],
+      text: { verbosity: "low" },
+      include: ["reasoning.encrypted_content"],
+      prompt_cache_key: "session",
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+    };
+
+    const result = applyProviderOutputLimit(payload, requested);
+    expect(result.payload).toBe(payload);
+    expect(result.evidence).toEqual({ requested, enforcement: "unsupported" });
+    expect(result.payload).not.toHaveProperty("max_output_tokens");
+  });
+
   it("adds the cap to current and legacy Google payload config", () => {
     expect(applyProviderOutputLimit({ model: "gemini", contents: [], config: {} }, requested)).toEqual({
       payload: { model: "gemini", contents: [], config: { maxOutputTokens: requested } },

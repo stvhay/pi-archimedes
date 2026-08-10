@@ -25,7 +25,11 @@ export function applyProviderOutputLimit(
     evidence.enforcement = "applied";
   }
 
-  if (evidence.enforcement === "unsupported" && Array.isArray(payload.input)) {
+  if (
+    evidence.enforcement === "unsupported" &&
+    Array.isArray(payload.input) &&
+    !isCodexResponsesPayload(payload)
+  ) {
     output().max_output_tokens = requested;
     evidence.enforcement = "applied";
   }
@@ -43,6 +47,13 @@ export function applyProviderOutputLimit(
   }
 
   return { payload: rewritten ?? payload, evidence };
+}
+
+function isCodexResponsesPayload(payload: Record<string, unknown>): boolean {
+  return typeof payload.instructions === "string" &&
+    isRecord(payload.text) &&
+    Array.isArray(payload.include) &&
+    payload.include.includes("reasoning.encrypted_content");
 }
 
 function clamped(value: unknown, requested: number): number {

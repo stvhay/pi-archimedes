@@ -27,7 +27,7 @@ Add cold one-shot child execution to the bounded v2.0.1 stack. Keep exactly one 
 
 - Root: `max_output_tokens`, `max_completion_tokens`, `max_tokens`, `maxOutputTokens`.
 - Google-style nested config: `config.maxOutputTokens` and legacy `generationConfig.maxOutputTokens`.
-- Unsupported, primitive, array, or malformed payloads remain unchanged and produce truthful unsupported evidence.
+- Unsupported, primitive, array, malformed, or Pi Codex Responses payloads remain unchanged and produce truthful unsupported evidence; Codex's current adapter exposes no provider output-cap field.
 
 ## Tasks
 
