@@ -71,6 +71,7 @@ export function streamEvents(
       recentOutput: [],
       toolCalls: [],
       finalOutput: undefined,
+      error: undefined,
     };
 
     const stderrLines: string[] = [];
@@ -221,13 +222,15 @@ export function streamEvents(
       clearStartupTimer();
       clearInterval(heartbeat);
       const durationMs = Date.now() - startTime;
-      const exitCode = termination ? 2 : (code ?? 1);
+      const processExitCode = code ?? 1;
       const usage = observedUsage();
 
-      if (exitCode !== 0 && !error) {
+      error ??= state.error;
+      if (processExitCode !== 0 && !error) {
         const stderr = stderrLines.join("\n").trim();
         if (stderr) error = stderr;
       }
+      const exitCode = termination ? 2 : state.error ? 1 : processExitCode;
       termination ??= exitCode === 0
         ? { reason: "completed", usageState: "complete" }
         : {

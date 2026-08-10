@@ -128,5 +128,6 @@ export interface StreamState {
   recentOutput: string[];
   toolCalls: SubagentToolCall[];
   finalOutput: string | undefined;
+  error?: string | undefined;
 }
 

@@ -191,6 +191,23 @@ describe("streamEvents bounded termination", () => {
     expect(result.error).toBe("provider failed");
     expect(result.termination).toMatchObject({ reason: "process-error" });
   });
+
+  it("reports assistant provider errors when Pi JSON mode exits zero", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+    const event = assistantEvent("message_end", "", 0, 0);
+    event.message.stopReason = "error";
+    Object.assign(event.message, { content: [], errorMessage: "Provider rejected request" });
+
+    writeEvent(child, event);
+    child.emit("close", 0, null);
+
+    const result = await pending;
+    expect(result.exitCode).toBe(1);
+    expect(result.error).toBe("Provider rejected request");
+    expect(result.finalOutput).toBeUndefined();
+    expect(result.termination).toEqual({ reason: "process-error", usageState: "unknown" });
+  });
 });
 
 async function finishWith(events: Array<Record<string, unknown>>) {

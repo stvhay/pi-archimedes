@@ -260,12 +260,13 @@ export function handleMessageUpdate(state: StreamState, event: MessageUpdateEven
  */
 export function handleMessageEnd(state: StreamState, event: MessageEndEvent): void {
   const message = event.message;
-  if (
-    !message ||
-    typeof message !== "object" ||
-    message.role !== "assistant" ||
-    !hasAssistantStreamData(message)
-  ) return;
+  if (!message || typeof message !== "object" || message.role !== "assistant") return;
+  if (message.stopReason === "error") {
+    state.error = typeof message.errorMessage === "string" && message.errorMessage.trim()
+      ? message.errorMessage.trim().slice(0, 4_000)
+      : "Provider request failed";
+  }
+  if (!hasAssistantStreamData(message)) return;
 
   // Finalized data replaces the latest partial message.
   clearStreamingMessage(state);
