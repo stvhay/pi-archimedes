@@ -7,6 +7,7 @@ import { getCoreSettingsItems } from "@pi-archimedes/core";
 import { getFooterSettingsItems } from "@pi-archimedes/footer/config";
 // diff (shiki) is lazy-loaded below to keep shiki out of the startup import chain
 import { getNotifySettingsItems } from "@pi-archimedes/notify";
+import { getSessionNameSettingsItems } from "@pi-archimedes/session-name";
 import { getSubagentSettingsItems } from "@pi-archimedes/subagent/config";
 import {
   loadAllConfig,
@@ -14,12 +15,14 @@ import {
   saveFooterConfig,
   saveDiffConfig,
   saveNotifyConfig,
+  saveSessionNameConfig,
   saveSubagentConfig,
   ANIMATION_STYLES,
   type CoreConfig,
   type FooterConfig,
   type DiffConfig,
   type NotifyConfig,
+  type SessionNameSettings,
   type SubagentConfig,
 } from "./config.js";
 
@@ -111,6 +114,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   const footerConfig: FooterConfig = { ...allConfig.footer };
   const diffConfig: DiffConfig = { ...allConfig.diff };
   const notifyConfig: NotifyConfig = { ...allConfig.notify };
+  const sessionNameConfig: SessionNameSettings = { ...allConfig.sessionName };
   const subagentConfig: SubagentConfig = {
     ...allConfig.subagent,
     defaultLimits: { ...allConfig.subagent.defaultLimits },
@@ -121,6 +125,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   const footerItems = getFooterSettingsItems();
   const diffItems = getDiffSettingsItems();
   const notifyItems = getNotifySettingsItems(notifyConfig);
+  const sessionNameItems = getSessionNameSettingsItems(sessionNameConfig);
   const subagentItems = getSubagentSettingsItems(subagentConfig);
 
   // Add submenus for text/number fields
@@ -188,6 +193,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   addSubmenus(diffItems);
   addSubmenus(footerItems);
   addSubmenus(notifyItems);
+  addSubmenus(sessionNameItems);
   addSubmenus(subagentItems);
 
   const items: SettingItem[] = [
@@ -195,6 +201,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
     ...footerItems,
     ...diffItems,
     ...notifyItems,
+    ...sessionNameItems,
     ...subagentItems,
     {
       id: "save",
@@ -245,6 +252,10 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
           break;
         }
 
+        // ── Session name settings ──
+        case "sessionNameEnabled": sessionNameConfig.enabled = newValue === "On"; break;
+        case "sessionNameModel": sessionNameConfig.model = newValue === "(current model)" ? undefined : newValue; break;
+
         // ── Subagent settings ──
         case "subagentMaxParallel": subagentConfig.maxParallel = Number.parseInt(newValue, 10); break;
         case "subagentMaxProviderRequests": subagentConfig.defaultLimits.maxProviderRequests = Number.parseInt(newValue, 10); break;
@@ -259,6 +270,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
           saveFooterConfig(footerConfig);
           saveDiffConfig(diffConfig);
           saveNotifyConfig(notifyConfig);
+          saveSessionNameConfig(sessionNameConfig);
           saveSubagentConfig(subagentConfig);
           done(undefined);
           return;
