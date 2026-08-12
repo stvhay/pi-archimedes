@@ -20,15 +20,18 @@
 | 16 | [Subagent agent→model mirror fix + agent discovery](done/plan-016-subagent-model-mirror.md) | ✅ COMPLETED (squash `9ae002a`) | 2026-07-28 |
 | 17 | [Splash Screen Pi 0.84.0 Compatibility](done/plan-017-splash-screen-pi-084.md) | ✅ COMPLETED | 2026-07-29 |
 | 18 | [Expose subagent Pi session IDs](done/2026-08-05-subagent-session-id.md) | ✅ COMPLETED | 2026-08-05 |
-| 19 | [Bounded subagent execution on v2.0.1](done/2026-08-09-bounded-subagent-execution-v2.md) | ✅ COMPLETED | 2026-08-09 |
-| 20 | [Repeated subagent error breaker on v2.0.1](done/2026-08-09-repeated-error-breaker-v2.md) | ✅ COMPLETED | 2026-08-09 |
+| 19 | [README overhaul](done/plan-019-readme-overhaul.md) | ✅ COMPLETED (PR #27) | 2026-08-09 |
+| 20 | [Pure logic tests](done/plan-020-pure-logic-tests.md) | ✅ COMPLETED (PR #28) | 2026-08-10 |
+| 21 | [Auto session naming](done/plan-021-session-name.md) | ✅ COMPLETED (PR #29) | 2026-08-13 |
+| 22 | [Bounded subagent execution on v2.0.1](done/2026-08-09-bounded-subagent-execution-v2.md) | ✅ COMPLETED | 2026-08-09 |
+| 23 | [Repeated subagent error breaker on v2.0.1](done/2026-08-09-repeated-error-breaker-v2.md) | ✅ COMPLETED | 2026-08-09 |
 
-> **Notes:**
+> **Notes:****
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
 > - [README overhaul (plan variant)](done/plan-005-readme-overhaul-plan.md) — supporting plan file, completed 2026-06-14.
 
 ## Quick Stats
 
-- Total Plans: 19
-- Completed: 19
+- Total Plans: 23
+- Completed: 23
 - In Progress: 0
