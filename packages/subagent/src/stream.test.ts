@@ -71,6 +71,7 @@ describe("streamEvents bounded termination", () => {
 
     child.stderr.write(`${encodeOutputLimitEvidence({
       requested: 16_384,
+      effective: 16_384,
       enforcement: "applied",
     })}\n`);
     child.stdout.write(`${JSON.stringify(assistantEvent("message_end", "bounded answer", 20, 16_384))}\n`);
@@ -84,11 +85,13 @@ describe("streamEvents bounded termination", () => {
 
     const result = await pending;
     expect(child.kill).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(2);
+    expect(result.progress).toMatchObject({ status: "failed" });
     expect(result.finalOutput).toBe("bounded answer");
     expect(result.usage).toMatchObject({ input: 20, output: 16_384 });
     expect(result.execution).toEqual({
       ...execution,
-      outputLimit: { requested: 16_384, enforcement: "applied" },
+      outputLimit: { requested: 16_384, effective: 16_384, enforcement: "applied" },
     });
     expect(result.termination).toMatchObject({ reason: "output-limit", limit: 16_384 });
   });

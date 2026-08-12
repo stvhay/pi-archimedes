@@ -8,7 +8,12 @@ import {
   applyProviderOutputLimit,
   encodeOutputLimitEvidence,
 } from "./output-limit.js";
-import type { SubagentLimits, SubagentTermination, SubagentTerminationReason } from "./types.js";
+import type {
+  OutputLimitEvidence,
+  SubagentLimits,
+  SubagentTermination,
+  SubagentTerminationReason,
+} from "./types.js";
 
 const LIMIT_KEYS = [
   "maxProviderRequests",
@@ -122,20 +127,19 @@ export class BudgetTracker {
     return true;
   }
 
-  observeOutputLimit(stopReason: unknown, observed: unknown, applied: boolean): void {
-    if (
-      this.termination ||
-      !applied ||
-      stopReason !== "length" ||
-      this.limits.maxOutputTokens === undefined
-    ) {
-      return;
-    }
+  observeOutputLimit(
+    stopReason: unknown,
+    observed: unknown,
+    evidence?: OutputLimitEvidence,
+  ): void {
+    if (this.termination || stopReason !== "length") return;
+    const observedOutput = isNonNegativeFiniteNumber(observed) ? observed : undefined;
+    const appliedCeiling = evidence?.enforcement === "applied" ? evidence.effective : undefined;
     this.stop(
       "output-limit",
-      this.limits.maxOutputTokens,
-      isNonNegativeFiniteNumber(observed) ? observed : undefined,
-      isNonNegativeFiniteNumber(observed) ? "complete" : "unknown",
+      observedOutput === appliedCeiling ? appliedCeiling : undefined,
+      observedOutput,
+      observedOutput !== undefined ? "complete" : "unknown",
       false,
     );
   }
@@ -225,7 +229,7 @@ export function registerChildLimitGuard(
   writeStop: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
 ): BudgetTracker {
   let activeContext: ExtensionContext | undefined;
-  let outputLimitApplied = false;
+  let outputLimit: OutputLimitEvidence | undefined;
   const tracker = new BudgetTracker(limits, (termination, abort) => {
     writeStop(encodeLimitStop(termination));
     if (abort) activeContext?.abort();
@@ -241,15 +245,15 @@ export function registerChildLimitGuard(
     if (limits.maxOutputTokens === undefined) return undefined;
     try {
       const result = applyProviderOutputLimit(event.payload, limits.maxOutputTokens);
-      outputLimitApplied = result.evidence.enforcement === "applied";
+      outputLimit = result.evidence;
       writeStop(encodeOutputLimitEvidence(result.evidence));
-      return outputLimitApplied ? result.payload : undefined;
+      return outputLimit.enforcement === "applied" ? result.payload : undefined;
     } catch {
-      outputLimitApplied = false;
-      writeStop(encodeOutputLimitEvidence({
+      outputLimit = {
         requested: limits.maxOutputTokens,
         enforcement: "unsupported",
-      }));
+      };
+      writeStop(encodeOutputLimitEvidence(outputLimit));
       return undefined;
     }
   });
@@ -264,7 +268,7 @@ export function registerChildLimitGuard(
     if (event.message.role !== "assistant") return;
     activeContext = ctx;
     tracker.observeAssistantUsage(event.message.usage);
-    tracker.observeOutputLimit(event.message.stopReason, event.message.usage?.output, outputLimitApplied);
+    tracker.observeOutputLimit(event.message.stopReason, event.message.usage?.output, outputLimit);
   });
   pi.on("session_before_compact", () => ({ cancel: true }));
 

@@ -16,37 +16,39 @@ export function applyProviderOutputLimit(
   const evidence: OutputLimitEvidence = { requested, enforcement: "unsupported" };
   if (!isRecord(payload)) return { payload, evidence };
 
-  let rewritten: Record<string, unknown> | undefined;
-  const output = () => rewritten ??= { ...payload };
-
-  for (const key of ROOT_OUTPUT_LIMIT_KEYS) {
-    if (!(key in payload)) continue;
-    output()[key] = clamped(payload[key], requested);
-    evidence.enforcement = "applied";
-  }
-
-  if (
-    evidence.enforcement === "unsupported" &&
+  const rootKeys = ROOT_OUTPUT_LIMIT_KEYS.filter((key) => key in payload);
+  const nestedKeys = Array.isArray(payload.contents)
+    ? NESTED_OUTPUT_LIMIT_KEYS.filter((key) => isRecord(payload[key]))
+    : [];
+  const addResponsesCap = rootKeys.length === 0 &&
     Array.isArray(payload.input) &&
-    !isCodexResponsesPayload(payload)
-  ) {
-    output().max_output_tokens = requested;
-    evidence.enforcement = "applied";
+    !isCodexResponsesPayload(payload);
+  if (rootKeys.length === 0 && nestedKeys.length === 0 && !addResponsesCap) {
+    return { payload, evidence };
   }
 
-  if (Array.isArray(payload.contents)) {
-    for (const key of NESTED_OUTPUT_LIMIT_KEYS) {
-      const nested = payload[key];
-      if (!isRecord(nested)) continue;
-      output()[key] = {
-        ...nested,
-        maxOutputTokens: clamped(nested.maxOutputTokens, requested),
-      };
-      evidence.enforcement = "applied";
-    }
+  const existing = [
+    ...rootKeys.map((key) => payload[key]),
+    ...nestedKeys.map((key) => (payload[key] as Record<string, unknown>).maxOutputTokens),
+  ];
+  const effective = existing.reduce<number>(
+    (limit, value) => Math.min(limit, clamped(value, requested)),
+    requested,
+  );
+  const rewritten: Record<string, unknown> = { ...payload };
+  for (const key of rootKeys) rewritten[key] = effective;
+  if (addResponsesCap) rewritten.max_output_tokens = effective;
+  for (const key of nestedKeys) {
+    rewritten[key] = {
+      ...(payload[key] as Record<string, unknown>),
+      maxOutputTokens: effective,
+    };
   }
 
-  return { payload: rewritten ?? payload, evidence };
+  return {
+    payload: rewritten,
+    evidence: { requested, effective, enforcement: "applied" },
+  };
 }
 
 function isCodexResponsesPayload(payload: Record<string, unknown>): boolean {
@@ -78,11 +80,22 @@ export function decodeOutputLimitEvidence(line: string): OutputLimitEvidence | u
       typeof value.requested !== "number" ||
       !Number.isSafeInteger(value.requested) ||
       value.requested <= 0 ||
-      (value.enforcement !== "applied" && value.enforcement !== "unsupported")
+      (value.enforcement !== "applied" && value.enforcement !== "unsupported") ||
+      (value.enforcement === "applied" && (
+        typeof value.effective !== "number" ||
+        !Number.isSafeInteger(value.effective) ||
+        value.effective <= 0 ||
+        value.effective > value.requested
+      )) ||
+      (value.enforcement === "unsupported" && value.effective !== undefined)
     ) {
       return undefined;
     }
-    return { requested: value.requested, enforcement: value.enforcement };
+    return {
+      requested: value.requested,
+      ...(value.effective !== undefined ? { effective: value.effective } : {}),
+      enforcement: value.enforcement,
+    };
   } catch {
     return undefined;
   }

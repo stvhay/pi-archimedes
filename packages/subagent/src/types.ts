@@ -32,6 +32,8 @@ export interface SubagentExecutionProfile {
 
 export interface OutputLimitEvidence {
   requested: number;
+  /** Exact provider payload ceiling after clamping; absent when enforcement is unsupported. */
+  effective?: number;
   enforcement: "applied" | "unsupported";
 }
 
