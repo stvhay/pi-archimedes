@@ -10,6 +10,7 @@ import {
   resolveLimits,
 } from "./limits.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { decodeOutputLimitEvidence } from "./output-limit.js";
 import type { SubagentLimits } from "./types.js";
 
 const usage = (overrides: Record<string, unknown> = {}) => ({
@@ -27,6 +28,7 @@ describe("normalizeLimits", () => {
       maxProviderRequests: 0,
       maxToolCalls: 0,
       maxTotalTokens: 0,
+      maxOutputTokens: 0,
       maxCostUsd: 0,
       maxDurationMs: 0,
     }, true)).toBeUndefined();
@@ -36,6 +38,7 @@ describe("normalizeLimits", () => {
     expect(() => normalizeLimits({ maxProviderRequests: -1 }, true)).toThrow("maxProviderRequests");
     expect(() => normalizeLimits({ maxProviderRequests: 1.5 }, false)).toThrow("maxProviderRequests");
     expect(() => normalizeLimits({ maxCostUsd: Number.POSITIVE_INFINITY }, false)).toThrow("maxCostUsd");
+    expect(() => normalizeLimits({ maxOutputTokens: 1.5 }, false)).toThrow("maxOutputTokens");
     expect(() => normalizeLimits({ maxDurationMs: 2_147_483_648 }, false)).toThrow("maxDurationMs");
   });
 
@@ -44,12 +47,14 @@ describe("normalizeLimits", () => {
       maxProviderRequests: 3,
       maxToolCalls: 4,
       maxTotalTokens: 5000,
+      maxOutputTokens: 16_384,
       maxCostUsd: 0.75,
       maxDurationMs: 30_000,
     }, false)).toEqual({
       maxProviderRequests: 3,
       maxToolCalls: 4,
       maxTotalTokens: 5000,
+      maxOutputTokens: 16_384,
       maxCostUsd: 0.75,
       maxDurationMs: 30_000,
     });
@@ -133,6 +138,63 @@ describe("BudgetTracker", () => {
     expect(tracker.termination).toMatchObject({ reason: "usage-unknown", usageState: "unknown" });
   });
 
+  it("records an applied provider length stop at its effective ceiling without requesting abort", () => {
+    const onStop = vi.fn();
+    const tracker = new BudgetTracker({ maxOutputTokens: 16_384 }, onStop);
+
+    tracker.observeOutputLimit("length", 8_192, {
+      requested: 16_384,
+      effective: 8_192,
+      enforcement: "applied",
+    });
+
+    expect(tracker.termination).toEqual({
+      reason: "output-limit",
+      limit: 8_192,
+      observed: 8_192,
+      usageState: "complete",
+    });
+    expect(onStop).toHaveBeenCalledWith(tracker.termination, false);
+  });
+
+  it("records native provider length stops without inventing a ceiling", () => {
+    const tracker = new BudgetTracker({ maxProviderRequests: 1 }, vi.fn());
+
+    tracker.observeOutputLimit("length", 8_192);
+
+    expect(tracker.termination).toEqual({
+      reason: "output-limit",
+      observed: 8_192,
+      usageState: "complete",
+    });
+  });
+
+  it("does not attribute an earlier provider length stop to a higher applied ceiling", () => {
+    const tracker = new BudgetTracker({ maxOutputTokens: 16_384 }, vi.fn());
+
+    tracker.observeOutputLimit("length", 8_192, {
+      requested: 16_384,
+      effective: 16_384,
+      enforcement: "applied",
+    });
+
+    expect(tracker.termination).toEqual({
+      reason: "output-limit",
+      observed: 8_192,
+      usageState: "complete",
+    });
+  });
+
+  it("does not claim non-length provider stops", () => {
+    const tracker = new BudgetTracker({ maxOutputTokens: 16_384 }, vi.fn());
+    tracker.observeOutputLimit("stop", 16_384, {
+      requested: 16_384,
+      effective: 16_384,
+      enforcement: "applied",
+    });
+    expect(tracker.termination).toBeUndefined();
+  });
+
   it("emits only the first stop", () => {
     const onStop = vi.fn();
     const tracker = new BudgetTracker({ maxProviderRequests: 1, maxToolCalls: 1 }, onStop);
@@ -196,6 +258,67 @@ describe("registerChildLimitGuard", () => {
       reason: "Subagent tool-call limit reached",
     });
     expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a lower provider cap as the exact applied length termination", () => {
+    const { pi, handlers } = fakePi();
+    const writeStop = vi.fn();
+    const abort = vi.fn();
+    registerChildLimitGuard(pi, { maxProviderRequests: 1, maxOutputTokens: 16_384 }, writeStop);
+
+    const rewritten = handlers.get("before_provider_request")?.({
+      payload: { model: "test", max_output_tokens: 8_192 },
+    }, context(abort));
+    expect(rewritten).toEqual({ model: "test", max_output_tokens: 8_192 });
+    expect(decodeOutputLimitEvidence(writeStop.mock.calls[0]![0])).toEqual({
+      requested: 16_384,
+      effective: 8_192,
+      enforcement: "applied",
+    });
+
+    handlers.get("message_end")?.({
+      message: { role: "assistant", stopReason: "length", usage: usage({ output: 8_192 }) },
+    }, context(abort));
+    expect(decodeLimitStop(writeStop.mock.calls[1]![0])).toMatchObject({
+      reason: "output-limit",
+      limit: 8_192,
+      observed: 8_192,
+    });
+    expect(abort).not.toHaveBeenCalled();
+
+    handlers.get("before_provider_request")?.({ payload: { max_output_tokens: 32_768 } }, context(abort));
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(writeStop).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs unsupported provider payloads with truthful evidence", () => {
+    const { pi, handlers } = fakePi();
+    const writeStop = vi.fn();
+    registerChildLimitGuard(pi, { maxProviderRequests: 1, maxOutputTokens: 16_384 }, writeStop);
+
+    expect(handlers.get("before_provider_request")?.({ payload: { custom: true } }, context())).toBeUndefined();
+    expect(decodeOutputLimitEvidence(writeStop.mock.calls[0]![0])).toEqual({
+      requested: 16_384,
+      enforcement: "unsupported",
+    });
+  });
+
+  it("reports a native provider length stop as failed even without a requested cap", () => {
+    const { pi, handlers } = fakePi();
+    const writeStop = vi.fn();
+    registerChildLimitGuard(pi, { maxProviderRequests: 1 }, writeStop);
+
+    handlers.get("before_provider_request")?.({ payload: { max_output_tokens: 8_192 } }, context());
+    handlers.get("message_end")?.({
+      message: { role: "assistant", stopReason: "length", usage: usage({ output: 8_192 }) },
+    }, context());
+
+    expect(writeStop).toHaveBeenCalledTimes(1);
+    expect(decodeLimitStop(writeStop.mock.calls[0]![0])).toEqual({
+      reason: "output-limit",
+      observed: 8_192,
+      usageState: "complete",
+    });
   });
 
   it("observes assistant usage and cancels compaction", () => {

@@ -13,6 +13,7 @@ Dispatch specialized subagents to offload complex tasks with live TUI streaming,
 - **Cost tracking** — detailed token usage (input, output, cache read/write) and cost per subagent, emitted through the core bus for the footer to consume
 - **Trace correlation** — results expose the ephemeral child's logical Pi session UUID as optional `childSessionId` when Pi emits a valid session event
 - **Execution limits** — optional per-child request, tool, token, cost, and wall-time ceilings with structured stop evidence and preserved partial output
+- **One-shot mode** — one isolated provider response with truthful best-effort native output-cap evidence
 - **`/agents` command** — full CRUD TUI for managing agent definitions with model picker, tool picker, and cross-scope collision warnings (available via the meta package)
 
 ## Screenshots
@@ -101,6 +102,34 @@ Top-level limits apply to every parallel child. A task may add stricter `limits`
 Request, tool-call, fanout, and wall-time limits are enforced before additional work. `maxDurationMs` cannot exceed `2,147,483,647`, the maximum safe Node.js timer delay. Token and cost limits use reported assistant usage, so they may exceed the configured value by one provider response. Keep Pi's `retry.provider.maxRetries` at `0` for bounded runs, and use a provider-side account or key cap when a hard spend ceiling is required.
 
 Child output parsing accepts legacy cumulative updates and Pi 0.84 delta-only streams. Live reconstructed previews are capped at 12,000 characters; authoritative final output and usage replace partial state when available. Forced stops still return whatever output and usage the child emitted.
+
+### One-shot mode
+
+Use `one-shot` for a complete read-only packet that needs one response without tool loops or ambient project material:
+
+```jsonc
+{
+  "task": "Review the embedded patch and return findings as JSON",
+  "mode": "one-shot",
+  "thinking": "high",
+  "limits": { "maxOutputTokens": 16384 }
+}
+```
+
+One-shot mode:
+
+- allows exactly one provider request and rejects nonzero `retry.provider.maxRetries`;
+- has no implicit wall-clock deadline; parent cancellation and explicit `maxDurationMs` still apply;
+- disables tools, discovered extensions, skills, context files, and session persistence;
+- leaves prompt-template macros available and explicitly loads only the child guard;
+- uses a packet-only system prompt unless a selected agent supplies one;
+- preserves output, usage, model, session, and structured termination evidence.
+
+`mode` and `thinking` are also accepted per parallel task. Task values override top-level values; selected agent frontmatter remains authoritative for model, thinking, and system prompt. Agent tool settings cannot override one-shot isolation.
+
+`maxOutputTokens` is accepted only for one-shot children. The guard clamps known provider payload fields without raising an existing lower cap. Applied evidence reports both requested and exact effective payload ceilings; unsupported payload shapes still run. Pi's Codex Responses payload does not expose a provider output cap and reports `unsupported` rather than sending an invalid field. Any provider `length` stop reports failed `output-limit` termination while retaining all emitted output and usage; when observed output does not reach an applied ceiling, the result does not invent a triggering limit. Cumulative `maxTotalTokens` and `maxCostUsd` are rejected for one-shot because post-response accounting cannot bound its sole call.
+
+Process environment, provider credentials, ordinary Pi settings, and prompt-template discovery remain inherited. A provider-side account or key limit remains the only hard spend ceiling. Headless scripts and durable run-bundle workers remain outside this interactive tool mode.
 
 ### Settings
 

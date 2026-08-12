@@ -1,8 +1,9 @@
 import { createInterface } from "node:readline";
 import type { ChildProcess } from "node:child_process";
-import type { StreamState, SubagentProgress, SubagentResult } from "./types.js";
+import type { ResolvedChildExecution, StreamState, SubagentProgress, SubagentResult } from "./types.js";
 import { getBus, Events } from "@pi-archimedes/core/bus";
 import { decodeLimitStop } from "./limits.js";
+import { decodeOutputLimitEvidence } from "./output-limit.js";
 import { scheduleTerminateChild } from "./spawn.js";
 import { addUsage, readUsage, toSubagentUsage } from "./usage.js";
 import {
@@ -19,6 +20,7 @@ import {
 export interface StreamCallbacks {
   agent?: string;
   task?: string;
+  execution?: ResolvedChildExecution;
   onProgress?: (progress: SubagentProgress) => void;
 }
 
@@ -68,6 +70,7 @@ export function streamEvents(
       accumulatedOutput: [],
       streamingOutput: undefined,
       streamingParts: new Map(),
+      outputLimit: undefined,
       recentOutput: [],
       toolCalls: [],
       finalOutput: undefined,
@@ -80,11 +83,16 @@ export function streamEvents(
     if (child.stderr) {
       const stderrReader = createInterface({ input: child.stderr, crlfDelay: Infinity });
       stderrReader.on("line", (line) => {
+        const outputLimit = decodeOutputLimitEvidence(line);
+        if (outputLimit) {
+          state.outputLimit = outputLimit;
+          return;
+        }
         const stop = decodeLimitStop(line);
         if (stop && !termination) {
           termination = stop;
           error = `Subagent stopped: ${stop.reason}`;
-          scheduleTerminateChild(child);
+          if (stop.reason !== "output-limit") scheduleTerminateChild(child);
         } else if (!stop) {
           stderrLines.push(line);
         }
@@ -245,6 +253,13 @@ export function streamEvents(
         exitCode,
         provider: state.provider,
         model: state.model,
+        ...(callbacks.execution ? {
+          execution: {
+            profile: { ...callbacks.execution.profile },
+            limits: callbacks.execution.limits ? { ...callbacks.execution.limits } : undefined,
+            ...(state.outputLimit ? { outputLimit: { ...state.outputLimit } } : {}),
+          },
+        } : {}),
         usage: toSubagentUsage(usage, state.turnCount),
         finalOutput: state.finalOutput ?? observedOutput(),
         error,

@@ -24,6 +24,7 @@
 | 20 | [Pure logic tests](done/plan-020-pure-logic-tests.md) | ✅ COMPLETED (PR #28) | 2026-08-10 |
 | 21 | [Auto session naming](done/plan-021-session-name.md) | ✅ COMPLETED (PR #29) | 2026-08-13 |
 | 22 | [Bounded subagent execution on v2.0.1](done/2026-08-09-bounded-subagent-execution-v2.md) | ✅ COMPLETED | 2026-08-09 |
+| 23 | [Subagent one-shot mode and output caps on v2.0.1](done/2026-08-09-subagent-one-shot-output-caps-v2.md) | ✅ COMPLETED | 2026-08-09 |
 
 > **Notes:****
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -31,6 +32,6 @@
 
 ## Quick Stats
 
-- Total Plans: 22
-- Completed: 22
+- Total Plans: 23
+- Completed: 23
 - In Progress: 0

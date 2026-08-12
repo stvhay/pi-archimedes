@@ -4,12 +4,22 @@ import {
   SUBAGENT_TERMINATION_REASONS,
   SUBAGENT_USAGE_STATES,
 } from "./types.js";
-import type { SubagentLimits, SubagentTermination, SubagentTerminationReason } from "./types.js";
+import {
+  applyProviderOutputLimit,
+  encodeOutputLimitEvidence,
+} from "./output-limit.js";
+import type {
+  OutputLimitEvidence,
+  SubagentLimits,
+  SubagentTermination,
+  SubagentTerminationReason,
+} from "./types.js";
 
 const LIMIT_KEYS = [
   "maxProviderRequests",
   "maxToolCalls",
   "maxTotalTokens",
+  "maxOutputTokens",
   "maxCostUsd",
   "maxDurationMs",
 ] as const satisfies readonly (keyof SubagentLimits)[];
@@ -18,6 +28,7 @@ const INTEGER_KEYS = new Set<keyof SubagentLimits>([
   "maxProviderRequests",
   "maxToolCalls",
   "maxTotalTokens",
+  "maxOutputTokens",
   "maxDurationMs",
 ]);
 
@@ -41,6 +52,9 @@ export function normalizeLimits(
     }
     if (INTEGER_KEYS.has(key) && !Number.isInteger(raw)) {
       throw new Error(`${key} must be an integer`);
+    }
+    if (key === "maxOutputTokens" && !Number.isSafeInteger(raw)) {
+      throw new Error(`${key} must be a safe integer`);
     }
     if (key === "maxDurationMs" && raw > MAX_SUBAGENT_DURATION_MS) {
       throw new Error(`${key} must not exceed ${MAX_SUBAGENT_DURATION_MS}`);
@@ -75,13 +89,13 @@ export class BudgetTracker {
   private toolCalls = 0;
   private totalTokens = 0;
   private totalCost = 0;
-  private readonly onStop: (termination: SubagentTermination) => void;
+  private readonly onStop: (termination: SubagentTermination, abort: boolean) => void;
 
   termination: SubagentTermination | undefined;
 
   constructor(
     readonly limits: SubagentLimits,
-    onStop: (termination: SubagentTermination) => void,
+    onStop: (termination: SubagentTermination, abort: boolean) => void,
   ) {
     this.onStop = onStop;
   }
@@ -111,6 +125,23 @@ export class BudgetTracker {
     }
     this.toolCalls++;
     return true;
+  }
+
+  observeOutputLimit(
+    stopReason: unknown,
+    observed: unknown,
+    evidence?: OutputLimitEvidence,
+  ): void {
+    if (this.termination || stopReason !== "length") return;
+    const observedOutput = isNonNegativeFiniteNumber(observed) ? observed : undefined;
+    const appliedCeiling = evidence?.enforcement === "applied" ? evidence.effective : undefined;
+    this.stop(
+      "output-limit",
+      observedOutput === appliedCeiling ? appliedCeiling : undefined,
+      observedOutput,
+      observedOutput !== undefined ? "complete" : "unknown",
+      false,
+    );
   }
 
   observeAssistantUsage(value: AssistantUsage | undefined): void {
@@ -152,6 +183,7 @@ export class BudgetTracker {
     limit: number | undefined,
     observed: number | undefined,
     usageState: SubagentTermination["usageState"] = "complete",
+    abort = true,
   ): false {
     if (!this.termination) {
       this.termination = {
@@ -160,7 +192,7 @@ export class BudgetTracker {
         ...(observed !== undefined ? { observed } : {}),
         usageState,
       };
-      this.onStop(this.termination);
+      this.onStop(this.termination, abort);
     }
     return false;
   }
@@ -197,14 +229,33 @@ export function registerChildLimitGuard(
   writeStop: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
 ): BudgetTracker {
   let activeContext: ExtensionContext | undefined;
-  const tracker = new BudgetTracker(limits, (termination) => {
+  let outputLimit: OutputLimitEvidence | undefined;
+  const tracker = new BudgetTracker(limits, (termination, abort) => {
     writeStop(encodeLimitStop(termination));
-    activeContext?.abort();
+    if (abort) activeContext?.abort();
   });
 
-  pi.on("before_provider_request", (_event, ctx) => {
+  pi.on("before_provider_request", (event, ctx) => {
     activeContext = ctx;
-    tracker.admitProviderRequest();
+    const alreadyTerminated = Boolean(tracker.termination);
+    if (!tracker.admitProviderRequest()) {
+      if (alreadyTerminated) ctx.abort();
+      return undefined;
+    }
+    if (limits.maxOutputTokens === undefined) return undefined;
+    try {
+      const result = applyProviderOutputLimit(event.payload, limits.maxOutputTokens);
+      outputLimit = result.evidence;
+      writeStop(encodeOutputLimitEvidence(result.evidence));
+      return outputLimit.enforcement === "applied" ? result.payload : undefined;
+    } catch {
+      outputLimit = {
+        requested: limits.maxOutputTokens,
+        enforcement: "unsupported",
+      };
+      writeStop(encodeOutputLimitEvidence(outputLimit));
+      return undefined;
+    }
   });
   pi.on("tool_call", (_event, ctx) => {
     activeContext = ctx;
@@ -217,6 +268,7 @@ export function registerChildLimitGuard(
     if (event.message.role !== "assistant") return;
     activeContext = ctx;
     tracker.observeAssistantUsage(event.message.usage);
+    tracker.observeOutputLimit(event.message.stopReason, event.message.usage?.output, outputLimit);
   });
   pi.on("session_before_compact", () => ({ cancel: true }));
 
