@@ -23,7 +23,7 @@ vi.mock("./utils/stats.js", () => ({
 import { registerFooter } from "./index.js";
 
 describe("registerFooter", () => {
-  it("renders extension statuses using Pi's single-line footer contract", () => {
+  it("renders each extension status on a separate line", () => {
     const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
     const pi = {
       on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(name, handler),
@@ -46,13 +46,18 @@ describe("registerFooter", () => {
         getGitBranch: () => "main",
         getExtensionStatuses: () => new Map([
           ["z-status", "Second\nline"],
+          ["beads-work", "pi-a.1 P1 First · pi-b.1 P2 Second"],
           ["a-status", "First"],
         ]),
         onBranchChange: () => () => {},
       },
     );
 
-    expect(component.render(200).at(-1)).toBe("First Second line");
-    expect(visibleWidth(component.render(12).at(-1))).toBeLessThanOrEqual(12);
+    expect(component.render(200).slice(-3)).toEqual([
+      "First",
+      "pi-a.1 P1 First · pi-b.1 P2 Second",
+      "Second line",
+    ]);
+    expect(component.render(12).slice(-3).every((line: string) => visibleWidth(line) <= 12)).toBe(true);
   });
 });

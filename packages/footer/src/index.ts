@@ -68,15 +68,13 @@ export function registerFooter(pi: ExtensionAPI): void {
             // ── Two-line split for narrow terminals ────────────────────────────
 
             const shouldSplit = width < splitThreshold;
-            const extensionStatuses = footerData.getExtensionStatuses();
-            const extensionLines = extensionStatuses.size === 0 ? [] : [truncateToWidth(
-              Array.from(extensionStatuses.entries())
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([, text]) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
-                .join(" "),
-              width,
-              theme.fg("dim", "..."),
-            )];
+            const extensionLines = Array.from(footerData.getExtensionStatuses().entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([, text]) => truncateToWidth(
+                text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim(),
+                width,
+                theme.fg("dim", "..."),
+              ));
 
             // Thinking display
             const thinkingIndicatorStr = formatThinkingIndicator(thinkingLevel, colorize);
