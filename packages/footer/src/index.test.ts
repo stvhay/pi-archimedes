@@ -23,7 +23,7 @@ vi.mock("./utils/stats.js", () => ({
 import { registerFooter } from "./index.js";
 
 describe("registerFooter", () => {
-  it("renders each extension status on a separate line", () => {
+  it("groups compact modes while rendering each Bead on a separate line", () => {
     const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
     const pi = {
       on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(name, handler),
@@ -46,18 +46,31 @@ describe("registerFooter", () => {
         getGitBranch: () => "main",
         getExtensionStatuses: () => new Map([
           ["z-status", "Second\nline"],
-          ["beads-work", "pi-a.1 P1 First · pi-b.1 P2 Second"],
+          ["ponytail", "Ponytail"],
+          ["beads-work", "pi-a.1 P1 First\npi-b.1 P2 Second"],
+          ["caveman", "Caveman"],
           ["a-status", "First"],
         ]),
         onBranchChange: () => () => {},
       },
     );
 
-    expect(component.render(200).slice(-3)).toEqual([
+    const wide = component.render(240);
+    expect(wide[0]).toContain("Caveman · Ponytail");
+    expect(wide.slice(-4)).toEqual([
       "First",
-      "pi-a.1 P1 First · pi-b.1 P2 Second",
+      "pi-a.1 P1 First",
+      "pi-b.1 P2 Second",
       "Second line",
     ]);
-    expect(component.render(12).slice(-3).every((line: string) => visibleWidth(line) <= 12)).toBe(true);
+
+    expect(component.render(100).slice(-5)).toEqual([
+      "Caveman · Ponytail",
+      "First",
+      "pi-a.1 P1 First",
+      "pi-b.1 P2 Second",
+      "Second line",
+    ]);
+    expect(component.render(12).every((line: string) => visibleWidth(line) <= 12)).toBe(true);
   });
 });

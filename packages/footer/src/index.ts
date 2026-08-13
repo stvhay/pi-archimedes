@@ -15,6 +15,8 @@ import { getContextWindowInfo, getTokenUsageStats, type TokenUsageStats } from "
 import { formatContextBar, formatGitStatusIndicators, formatThinkingIndicator, formatTokenCount } from "./utils/format.js";
 import { footerIcons } from "./utils/icons.js";
 
+const INLINE_STATUS_KEYS = new Set(["caveman", "ponytail"]);
+
 export function registerFooter(pi: ExtensionAPI): void {
   // Module-level state for session lifecycle (shared between session_start and session_shutdown)
   let footerAccumulator: CostAccumulator | undefined;
@@ -68,13 +70,21 @@ export function registerFooter(pi: ExtensionAPI): void {
             // ── Two-line split for narrow terminals ────────────────────────────
 
             const shouldSplit = width < splitThreshold;
-            const extensionLines = Array.from(footerData.getExtensionStatuses().entries())
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([, text]) => truncateToWidth(
-                text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim(),
-                width,
-                theme.fg("dim", "..."),
-              ));
+            const separator = theme.fg("dim", " · ");
+            const sanitizeStatus = (text: string) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+            const extensionStatuses = Array.from(footerData.getExtensionStatuses().entries())
+              .sort(([a], [b]) => a.localeCompare(b));
+            const compactStatusStr = extensionStatuses
+              .filter(([key]) => INLINE_STATUS_KEYS.has(key))
+              .map(([, text]) => sanitizeStatus(text))
+              .filter(Boolean)
+              .join(separator);
+            const extensionLines = extensionStatuses
+              .filter(([key]) => !INLINE_STATUS_KEYS.has(key))
+              .flatMap(([key, text]) => key === "beads-work" ? text.split(/\r?\n/) : [text])
+              .map((text) => sanitizeStatus(text))
+              .filter(Boolean)
+              .map((text) => truncateToWidth(text, width, theme.fg("dim", "...")));
 
             // Thinking display
             const thinkingIndicatorStr = formatThinkingIndicator(thinkingLevel, colorize);
@@ -91,7 +101,6 @@ export function registerFooter(pi: ExtensionAPI): void {
               worktreeBranch ? colorize("syntaxNumber", footerIcons.worktree + " " + worktreeBranch) : "",
             ].filter(Boolean);
 
-            const separator = theme.fg("dim", " · ");
             const leftSectionStr = leftSections.join(separator);
 
             // Token stats with context percentage
@@ -117,6 +126,15 @@ export function registerFooter(pi: ExtensionAPI): void {
 
             const rawStatsSectionStr = statsParts.join(" ");
             const statsSectionStr = theme.fg("dim", rawStatsSectionStr);
+            const showCompactStatusesInline = Boolean(compactStatusStr) && !shouldSplit
+              && visibleWidth(leftSectionStr) + visibleWidth(compactStatusStr) + visibleWidth(statsSectionStr)
+                + 2 * visibleWidth(separator) + 13 <= width;
+            const displayedLeftSectionStr = showCompactStatusesInline
+              ? leftSectionStr + separator + compactStatusStr
+              : leftSectionStr;
+            const statusLines = compactStatusStr && !showCompactStatusesInline
+              ? [truncateToWidth(compactStatusStr, width, theme.fg("dim", "...")), ...extensionLines]
+              : extensionLines;
 
             if (shouldSplit) {
               // ── Two-line mode ──────────────────────────────────────────────
@@ -135,13 +153,13 @@ export function registerFooter(pi: ExtensionAPI): void {
 
               // Edge case: if both stats and bar are empty, return only line 1
               if (!rightSectionStr) {
-                return [clampLine(leftSectionStr, width), ...extensionLines];
+                return [clampLine(displayedLeftSectionStr, width), ...statusLines];
               }
 
               return [
-                clampLine(leftSectionStr, width),
+                clampLine(displayedLeftSectionStr, width),
                 clampLine(rightSectionStr, width),
-                ...extensionLines,
+                ...statusLines,
               ];
             }
 
@@ -153,7 +171,7 @@ export function registerFooter(pi: ExtensionAPI): void {
             // Calculate available space for the context progress bar (after stats)
             const availableBarSpace = Math.max(
               2,
-              width - visibleWidth(leftSectionStr) - 1 - visibleWidth(sectionSeparator) - visibleWidth(statsSectionStr) - 10,
+              width - visibleWidth(displayedLeftSectionStr) - 1 - visibleWidth(sectionSeparator) - visibleWidth(statsSectionStr) - 10,
             );
 
             // Context progress bar (expands to fill remaining space)
@@ -165,7 +183,7 @@ export function registerFooter(pi: ExtensionAPI): void {
             if (contextBarStr) rightSections.push(contextBarStr);
             const rightSectionStr = rightSections.join(theme.fg("dim", " · "));
 
-            return [clampLine(leftSectionStr + sectionSeparator + rightSectionStr, width), ...extensionLines];
+            return [clampLine(displayedLeftSectionStr + sectionSeparator + rightSectionStr, width), ...statusLines];
           } catch (e) {
             console.error("[archimedes:footer] Render error:", e);
             return [];
