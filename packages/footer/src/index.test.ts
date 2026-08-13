@@ -47,7 +47,7 @@ describe("registerFooter", () => {
         getExtensionStatuses: () => new Map([
           ["z-status", "Second\nline"],
           ["ponytail", "Ponytail"],
-          ["beads-work", "pi-a.1 P1 First\npi-b.1 P2 Second"],
+          ["beads-work", "◐ pi-a.1     P1  First\n◐ pi-long.1  P2  Second"],
           ["caveman", "Caveman"],
           ["a-status", "First"],
         ]),
@@ -59,16 +59,25 @@ describe("registerFooter", () => {
     expect(wide[0]).toContain("Caveman · Ponytail");
     expect(wide.slice(-4)).toEqual([
       "First",
-      "pi-a.1 P1 First",
-      "pi-b.1 P2 Second",
+      "◐ pi-a.1     P1  First",
+      "◐ pi-long.1  P2  Second",
       "Second line",
     ]);
 
-    expect(component.render(100).slice(-5)).toEqual([
+    const splitWithRoom = component.render(100);
+    expect(splitWithRoom[0]).toContain("Caveman · Ponytail");
+    expect(splitWithRoom.slice(-4)).toEqual([
+      "First",
+      "◐ pi-a.1     P1  First",
+      "◐ pi-long.1  P2  Second",
+      "Second line",
+    ]);
+
+    expect(component.render(50).slice(-5)).toEqual([
       "Caveman · Ponytail",
       "First",
-      "pi-a.1 P1 First",
-      "pi-b.1 P2 Second",
+      "◐ pi-a.1     P1  First",
+      "◐ pi-long.1  P2  Second",
       "Second line",
     ]);
     expect(component.render(12).every((line: string) => visibleWidth(line) <= 12)).toBe(true);

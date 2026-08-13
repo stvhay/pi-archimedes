@@ -44,7 +44,7 @@ A status bar that surfaces what matters without getting in the way.
 - Directory, git branch (with clean/dirty indicator), model, thinking level, worktree
 - Token stats (↑input ↓output + cost)
 - Color-coded context window bar
-- Responsive keyed statuses: Caveman and Ponytail inline when space permits, newline-delimited entries on separate width-bounded rows
+- Responsive keyed statuses: Caveman and Ponytail on the first row whenever they fit, newline-delimited entries on separate aligned, width-bounded rows
 
 ### 🔍 Diff ([`@pi-archimedes/diff`](packages/diff/README.md))
 

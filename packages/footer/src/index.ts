@@ -71,7 +71,10 @@ export function registerFooter(pi: ExtensionAPI): void {
 
             const shouldSplit = width < splitThreshold;
             const separator = theme.fg("dim", " · ");
-            const sanitizeStatus = (text: string) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+            const sanitizeStatus = (text: string, collapseSpaces = true) => {
+              const oneLine = text.replace(/[\r\n\t]/g, " ");
+              return (collapseSpaces ? oneLine.replace(/ +/g, " ") : oneLine).trim();
+            };
             const extensionStatuses = Array.from(footerData.getExtensionStatuses().entries())
               .sort(([a], [b]) => a.localeCompare(b));
             const compactStatusStr = extensionStatuses
@@ -81,8 +84,9 @@ export function registerFooter(pi: ExtensionAPI): void {
               .join(separator);
             const extensionLines = extensionStatuses
               .filter(([key]) => !INLINE_STATUS_KEYS.has(key))
-              .flatMap(([key, text]) => key === "beads-work" ? text.split(/\r?\n/) : [text])
-              .map((text) => sanitizeStatus(text))
+              .flatMap(([key, text]) => key === "beads-work"
+                ? text.split(/\r?\n/).map((line) => sanitizeStatus(line, false))
+                : [sanitizeStatus(text)])
               .filter(Boolean)
               .map((text) => truncateToWidth(text, width, theme.fg("dim", "...")));
 
@@ -126,9 +130,11 @@ export function registerFooter(pi: ExtensionAPI): void {
 
             const rawStatsSectionStr = statsParts.join(" ");
             const statsSectionStr = theme.fg("dim", rawStatsSectionStr);
-            const showCompactStatusesInline = Boolean(compactStatusStr) && !shouldSplit
-              && visibleWidth(leftSectionStr) + visibleWidth(compactStatusStr) + visibleWidth(statsSectionStr)
+            const compactStatusesFit = shouldSplit
+              ? visibleWidth(leftSectionStr) + visibleWidth(compactStatusStr) + visibleWidth(separator) <= width
+              : visibleWidth(leftSectionStr) + visibleWidth(compactStatusStr) + visibleWidth(statsSectionStr)
                 + 2 * visibleWidth(separator) + 13 <= width;
+            const showCompactStatusesInline = Boolean(compactStatusStr) && compactStatusesFit;
             const displayedLeftSectionStr = showCompactStatusesInline
               ? leftSectionStr + separator + compactStatusStr
               : leftSectionStr;
