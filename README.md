@@ -44,6 +44,7 @@ A status bar that surfaces what matters without getting in the way.
 - Directory, git branch (with clean/dirty indicator), model, thinking level, worktree
 - Token stats (↑input ↓output + cost)
 - Color-coded context window bar
+- Keyed status rows published by other Pi extensions
 
 ### 🔍 Diff ([`@pi-archimedes/diff`](packages/diff/README.md))
 

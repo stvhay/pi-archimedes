@@ -68,6 +68,15 @@ export function registerFooter(pi: ExtensionAPI): void {
             // ── Two-line split for narrow terminals ────────────────────────────
 
             const shouldSplit = width < splitThreshold;
+            const extensionStatuses = footerData.getExtensionStatuses();
+            const extensionLines = extensionStatuses.size === 0 ? [] : [truncateToWidth(
+              Array.from(extensionStatuses.entries())
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([, text]) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
+                .join(" "),
+              width,
+              theme.fg("dim", "..."),
+            )];
 
             // Thinking display
             const thinkingIndicatorStr = formatThinkingIndicator(thinkingLevel, colorize);
@@ -128,12 +137,13 @@ export function registerFooter(pi: ExtensionAPI): void {
 
               // Edge case: if both stats and bar are empty, return only line 1
               if (!rightSectionStr) {
-                return [clampLine(leftSectionStr, width)];
+                return [clampLine(leftSectionStr, width), ...extensionLines];
               }
 
               return [
                 clampLine(leftSectionStr, width),
                 clampLine(rightSectionStr, width),
+                ...extensionLines,
               ];
             }
 
@@ -157,7 +167,7 @@ export function registerFooter(pi: ExtensionAPI): void {
             if (contextBarStr) rightSections.push(contextBarStr);
             const rightSectionStr = rightSections.join(theme.fg("dim", " · "));
 
-            return [clampLine(leftSectionStr + sectionSeparator + rightSectionStr, width)];
+            return [clampLine(leftSectionStr + sectionSeparator + rightSectionStr, width), ...extensionLines];
           } catch (e) {
             console.error("[archimedes:footer] Render error:", e);
             return [];
