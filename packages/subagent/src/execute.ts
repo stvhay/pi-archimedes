@@ -4,7 +4,7 @@ import { emitCostUpdate } from "./cost.js";
 import { addUsage, fromSubagentUsage } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.js";
-import type { ResolvedChildExecution, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
+import type { ResolvedChildExecution, SubagentOutputContract, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
 
 export interface ExecutionControl {
   signal: AbortSignal;
@@ -38,6 +38,7 @@ export interface ExecuteOptions {
   signal: AbortSignal | undefined;
   onUpdate: ((progress: SubagentProgress) => void) | undefined;
   execution: ResolvedChildExecution;
+  outputContract?: SubagentOutputContract | undefined;
 }
 
 function executionEvidence(
@@ -164,6 +165,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       agent: agentName,
       task: options.task,
       execution: executionEvidence(options.execution, result.execution?.outputLimit),
+      ...(options.outputContract ? { outputContract: options.outputContract } : {}),
       progress: result.progress
         ? { ...result.progress, agent: agentName, durationMs }
         : // Defensive: streamEvents should always return a progress, but if not,
@@ -210,6 +212,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       } as SubagentUsage,
       model: undefined,
       execution: executionEvidence(options.execution),
+      ...(options.outputContract ? { outputContract: options.outputContract } : {}),
       finalOutput: undefined,
       error: errorMessage,
       termination: { reason: "process-error", usageState: "unknown" },

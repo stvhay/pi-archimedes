@@ -12,10 +12,12 @@ import { validateModel, firstError } from "./model-validation.js";
 import {
   MAX_SUBAGENT_DURATION_MS,
   SUBAGENT_EXECUTION_MODES,
+  SUBAGENT_OUTPUT_CONTRACTS,
   SUBAGENT_THINKING_LEVELS,
 } from "./types.js";
 import type {
   SubagentDetails,
+  SubagentOutputContract,
   SubagentProgress,
   SubagentResult,
   SubagentToolResult,
@@ -40,6 +42,9 @@ const ExecutionModeSchema = StringEnum(SUBAGENT_EXECUTION_MODES, {
 const ThinkingLevelSchema = StringEnum(SUBAGENT_THINKING_LEVELS, {
   description: "Child thinking level. Agent frontmatter wins, then task-level, then top-level thinking.",
 });
+const OutputContractSchema = StringEnum(SUBAGENT_OUTPUT_CONTRACTS, {
+  description: "Caller-supplied result transport label; Archimedes reports but does not evaluate it.",
+});
 
 const TaskItem = Type.Object({
   agent: Type.Optional(Type.String({
@@ -51,6 +56,7 @@ const TaskItem = Type.Object({
   limits: Type.Optional(SubagentLimitsSchema),
   mode: Type.Optional(ExecutionModeSchema),
   thinking: Type.Optional(ThinkingLevelSchema),
+  outputContract: Type.Optional(OutputContractSchema),
 });
 
 const SUBAGENT_PARAMS_SCHEMA = Type.Object({
@@ -75,6 +81,7 @@ const SUBAGENT_PARAMS_SCHEMA = Type.Object({
   limits: Type.Optional(SubagentLimitsSchema),
   mode: Type.Optional(ExecutionModeSchema),
   thinking: Type.Optional(ThinkingLevelSchema),
+  outputContract: Type.Optional(OutputContractSchema),
 });
 
 type SubagentParams = Static<typeof SUBAGENT_PARAMS_SCHEMA>;
@@ -184,6 +191,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
             cwd: task.cwd ?? undefined,
             execution,
+            outputContract: (task.outputContract ?? params.outputContract) as SubagentOutputContract | undefined,
           })),
           signal: signal ?? undefined,
           onUpdate: (progress: SubagentProgress[]) => {
@@ -269,6 +277,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           cwd: params.cwd ?? undefined,
           signal: signal ?? undefined,
           execution,
+          outputContract: params.outputContract as SubagentOutputContract | undefined,
           onUpdate: (progress: SubagentProgress) => {
             onUpdate?.({
               content: [],

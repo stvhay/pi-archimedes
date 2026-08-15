@@ -178,12 +178,12 @@ describe("subagent dispatch policy integration", () => {
     expect(result.details.results).toHaveLength(800);
   });
 
-  it("passes operator default limits into a single child", async () => {
+  it("passes operator default limits and output contract into a single child", async () => {
     executeSubagentMock.mockResolvedValue(completedResult("one"));
 
     await registeredSubagentTool().execute(
       "id",
-      { task: "one" },
+      { task: "one", outputContract: "artifact" },
       undefined,
       undefined,
       context(process.cwd()),
@@ -191,6 +191,7 @@ describe("subagent dispatch policy integration", () => {
 
     expect(executeSubagentMock).toHaveBeenCalledWith(expect.objectContaining({
       cwd: undefined,
+      outputContract: "artifact",
       execution: {
         profile: { mode: "agentic", thinking: undefined },
         limits: { maxProviderRequests: 2 },
@@ -198,7 +199,7 @@ describe("subagent dispatch policy integration", () => {
     }));
   });
 
-  it("passes one resolved execution plan per parallel child", async () => {
+  it("passes one resolved execution plan and output contract per parallel child", async () => {
     executeParallelMock.mockResolvedValue([
       completedResult("one-shot"),
       completedResult("agentic"),
@@ -207,9 +208,10 @@ describe("subagent dispatch policy integration", () => {
     await registeredSubagentTool().execute(
       "id",
       {
+        outputContract: "inline",
         tasks: [
           { task: "one-shot", mode: "one-shot", limits: { maxOutputTokens: 16_384 } },
-          { task: "agentic", mode: "agentic" },
+          { task: "agentic", mode: "agentic", outputContract: "pass-no-findings" },
         ],
       },
       undefined,
@@ -222,10 +224,12 @@ describe("subagent dispatch policy integration", () => {
       profile: { mode: "one-shot", thinking: undefined },
       limits: { maxProviderRequests: 1, maxOutputTokens: 16_384 },
     });
+    expect(tasks[0].outputContract).toBe("inline");
     expect(tasks[1].execution).toEqual({
       profile: { mode: "agentic", thinking: undefined },
       limits: { maxProviderRequests: 2 },
     });
+    expect(tasks[1].outputContract).toBe("pass-no-findings");
   });
 
   it("rejects cumulative token and cost limits for one-shot before spawn", async () => {

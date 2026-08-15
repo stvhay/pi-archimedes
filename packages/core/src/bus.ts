@@ -3,12 +3,7 @@
 const BUS_KEY = Symbol.for("archimedes:bus");
 const QUEUE_KEY = Symbol.for("archimedes:busQueue");
 
-interface Bus {
-  emit(event: string, payload: unknown): void;
-  on(event: string, listener: (payload: unknown) => void): () => void;
-}
-
-interface CostUpdatePayload {
+export interface CostUpdatePayload {
   source: string;
   inputTokens?: number;
   outputTokens?: number;
@@ -16,6 +11,52 @@ interface CostUpdatePayload {
   cacheWriteTokens?: number;
   cost?: number;
 }
+
+export interface TodoUpdatePayload {
+  source: string;       // "main" or "subagent:<agent-name>"
+  todos: Array<{ id: number; title: string; description: string; status: "not-started" | "in-progress" | "completed" }>;
+}
+
+export interface TodoClearPayload {
+  source: string;
+}
+
+export interface AskRequestPayload {
+  source: string;        // "subagent:<agent-name>"
+  requestId: string;     // unique id to match request → response
+  questions: Array<{ id: string; question: string; description?: string; options: Array<{ label: string }>; multi?: boolean; recommended?: number }>;
+}
+
+export interface AskResponsePayload {
+  requestId: string;
+  cancelled: boolean;
+  results: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
+}
+
+export interface ArchimedesEventPayloadMap {
+  "archimedes:cost_update": CostUpdatePayload;
+  "archimedes:todos_update": TodoUpdatePayload;
+  "archimedes:todos_clear": TodoClearPayload;
+  "archimedes:ask_request": AskRequestPayload;
+  "archimedes:ask_response": AskResponsePayload;
+}
+
+export interface ArchimedesBus {
+  emit<K extends keyof ArchimedesEventPayloadMap>(
+    event: K,
+    payload: ArchimedesEventPayloadMap[K],
+  ): void;
+  on<K extends keyof ArchimedesEventPayloadMap>(
+    event: K,
+    listener: (payload: ArchimedesEventPayloadMap[K]) => void,
+  ): () => void;
+}
+
+type Listener = (payload: any) => void;
+type RuntimeBus = ArchimedesBus & {
+  emit(event: string, payload: unknown): void;
+  on(event: string, listener: Listener): () => void;
+};
 
 // Type-safe globalThis access — avoids `as unknown as` casts
 function getGlobal<T>(key: symbol): T | undefined {
@@ -25,8 +66,8 @@ function setGlobal<T>(key: symbol, value: T): void {
   (globalThis as Record<symbol, unknown>)[key] = value;
 }
 
-function createBus(): Bus {
-  const listeners = new Map<string, Array<(payload: unknown) => void>>();
+function createBus(): RuntimeBus {
+  const listeners = new Map<string, Listener[]>();
 
   return {
     emit(event: string, payload: unknown): void {
@@ -48,7 +89,7 @@ function createBus(): Bus {
         setGlobal(QUEUE_KEY, queue);
       }
     },
-    on(event: string, listener: (payload: unknown) => void): () => void {
+    on(event: string, listener: Listener): () => void {
       if (!listeners.has(event)) {
         listeners.set(event, []);
       }
@@ -78,8 +119,8 @@ function createBus(): Bus {
   };
 }
 
-export function getBus(): Bus {
-  let bus = getGlobal<Bus>(BUS_KEY);
+function getRuntimeBus(): RuntimeBus {
+  let bus = getGlobal<RuntimeBus>(BUS_KEY);
   if (!bus) {
     bus = createBus();
     setGlobal(BUS_KEY, bus);
@@ -87,8 +128,12 @@ export function getBus(): Bus {
   return bus;
 }
 
+export function getBus(): ArchimedesBus {
+  return getRuntimeBus();
+}
+
 export function initBus(): void {
-  const bus = getBus();
+  const bus = getRuntimeBus();
   // Flush queued events (if any were emitted before init)
   // Snapshot and clear before iterating to prevent infinite loops from re-queueing
   const queue = getGlobal<Array<{ event: string; payload: unknown }>>(QUEUE_KEY) ?? [];
@@ -105,26 +150,3 @@ export const Events = {
   ASK_REQUEST: "archimedes:ask_request",
   ASK_RESPONSE: "archimedes:ask_response",
 } as const;
-
-interface TodoUpdatePayload {
-  source: string;       // "main" or "subagent:<agent-name>"
-  todos: Array<{ id: number; title: string; description: string; status: "not-started" | "in-progress" | "completed" }>;
-}
-
-interface TodoClearPayload {
-  source: string;
-}
-
-interface AskRequestPayload {
-  source: string;        // "subagent:<agent-name>"
-  requestId: string;     // unique id to match request → response
-  questions: Array<{ id: string; question: string; description?: string; options: Array<{ label: string }>; multi?: boolean; recommended?: number }>;
-}
-
-interface AskResponsePayload {
-  requestId: string;
-  cancelled: boolean;
-  results: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
-}
-
-export type { CostUpdatePayload, TodoUpdatePayload, TodoClearPayload, AskRequestPayload, AskResponsePayload };

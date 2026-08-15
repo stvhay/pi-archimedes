@@ -1,10 +1,22 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { getBus, initBus, Events } from "./bus.js";
+import {
+  getBus as getTypedBus,
+  initBus,
+  Events,
+  type ArchimedesBus,
+  type CostUpdatePayload,
+} from "./bus.js";
 
 // ── globalThis cleanup ──────────────────────────────────────────────────────
 
 const BUS_KEY = Symbol.for("archimedes:bus");
 const QUEUE_KEY = Symbol.for("archimedes:busQueue");
+
+type TestBus = {
+  emit(event: string, payload: unknown): void;
+  on(event: string, listener: (payload: any) => void): () => void;
+};
+const getBus = (): TestBus => getTypedBus() as unknown as TestBus;
 
 afterEach(() => {
   // Reset globalThis bus and queue to avoid test pollution
@@ -150,5 +162,21 @@ describe("Events constant", () => {
     expect(Events.TODOS_CLEAR).toBe("archimedes:todos_clear");
     expect(Events.ASK_REQUEST).toBe("archimedes:ask_request");
     expect(Events.ASK_RESPONSE).toBe("archimedes:ask_response");
+  });
+
+  it("exposes typed known-event payloads", () => {
+    const bus: ArchimedesBus = getBus();
+    const payload: CostUpdatePayload = { source: "subagent:test", cost: 0.25 };
+    let observed: number | undefined;
+    bus.on(Events.COST_UPDATE, (event) => {
+      observed = event.cost;
+    });
+    bus.emit(Events.COST_UPDATE, payload);
+    if (false) {
+      // @ts-expect-error Known events reject malformed public payloads.
+      bus.emit(Events.COST_UPDATE, { source: 123 });
+    }
+
+    expect(observed).toBe(0.25);
   });
 });

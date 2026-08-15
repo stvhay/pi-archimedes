@@ -175,6 +175,16 @@ Per-agent `model` and `thinking` assignments made in the `/agents` TUI are store
 
 When installed via `pi-archimedes` (the meta package), subagent cost events flow through `@pi-archimedes/core/bus` and are consumed by `@pi-archimedes/footer`'s `CostAccumulator`. This merges subagent tokens and cost into the main status bar for a unified view.
 
+Stable integration ports are available without resolving package files:
+
+```ts
+import { resolveAgentModel } from "@pi-archimedes/subagent/agents";
+import type { SubagentToolResult } from "@pi-archimedes/subagent/types";
+import { Events, getBus } from "@pi-archimedes/core/bus";
+```
+
+`details.results` retains complete request-ordered child evidence across success and failure, including available partial output, usage, execution limits, termination, and optional child session/trace correlation. `outputContract` is an optional caller transport label; Archimedes reports it but does not persist, score, or accept results. `resolveAgentModel` returns only the configured model from normal agent discovery. Bus payloads cover UI and cost coordination, not canonical results or workflow authority.
+
 The `/agents` command is also only registered by the meta package (not by standalone `@pi-archimedes/subagent`).
 
 ← Back to [pi-archimedes](../../README.md)

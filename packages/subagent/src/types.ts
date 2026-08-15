@@ -2,6 +2,14 @@ import type { Usage } from "@earendil-works/pi-ai";
 
 export const MAX_SUBAGENT_DURATION_MS = 2_147_483_647;
 
+export const SUBAGENT_OUTPUT_CONTRACTS = [
+  "inline",
+  "artifact",
+  "status-only",
+  "pass-no-findings",
+] as const;
+export type SubagentOutputContract = (typeof SUBAGENT_OUTPUT_CONTRACTS)[number];
+
 export const SUBAGENT_EXECUTION_MODES = ["agentic", "one-shot"] as const;
 export type SubagentExecutionMode = (typeof SUBAGENT_EXECUTION_MODES)[number];
 
@@ -27,7 +35,7 @@ export interface SubagentLimits {
 
 export interface SubagentExecutionProfile {
   mode: SubagentExecutionMode;
-  thinking: string | undefined;
+  thinking?: string | undefined;
 }
 
 export interface OutputLimitEvidence {
@@ -39,7 +47,7 @@ export interface OutputLimitEvidence {
 
 export interface ResolvedChildExecution {
   profile: SubagentExecutionProfile;
-  limits: SubagentLimits | undefined;
+  limits?: SubagentLimits | undefined;
   outputLimit?: OutputLimitEvidence;
 }
 
@@ -78,6 +86,11 @@ export interface SubagentUsage {
   turns: number;
 }
 
+export interface SubagentChildTraceRef {
+  sessionId: string;
+  traceId?: string;
+}
+
 export interface SubagentToolCall {
   name: string;
   argsPreview: string;
@@ -114,22 +127,32 @@ export interface SubagentProgress {
   toolCalls: SubagentToolCall[] | undefined;
 }
 
+export interface SubagentProgressSummary {
+  toolCount: number;
+  tokens: number;
+  durationMs: number;
+}
+
 export interface SubagentResult {
   agent: string;
   task: string;
   /** Logical Pi session UUID for this spawned subagent process. */
   childSessionId?: string;
+  /** Native child trace reference; traceId is omitted when unavailable. */
+  childTrace?: SubagentChildTraceRef;
   exitCode: number;
   usage: SubagentUsage;
   provider?: string | undefined;
-  model: string | undefined;
+  model?: string | undefined;
   /** Effective child profile, limits, and output-limit enforcement evidence. */
   execution?: ResolvedChildExecution;
-  finalOutput: string | undefined;
-  error: string | undefined;
+  /** Caller-supplied transport label; Archimedes does not evaluate it. */
+  outputContract?: SubagentOutputContract;
+  finalOutput?: string | undefined;
+  error?: string | undefined;
   termination?: SubagentTermination;
-  progress: SubagentProgress | undefined;
-  progressSummary: { toolCount: number; tokens: number; durationMs: number } | undefined;
+  progress?: SubagentProgress | undefined;
+  progressSummary?: SubagentProgressSummary | undefined;
 }
 
 export interface SubagentToolResult {
@@ -143,7 +166,7 @@ export interface SubagentToolResult {
 export interface SubagentDetails {
   mode: "single" | "parallel";
   results: SubagentResult[];
-  progress: SubagentProgress[] | undefined;
+  progress?: SubagentProgress[] | undefined;
 }
 
 /** Mutable state during streaming — shared between stream.ts and handlers.ts */
@@ -168,4 +191,3 @@ export interface StreamState {
   finalOutput: string | undefined;
   error?: string | undefined;
 }
-

@@ -607,6 +607,9 @@ describe("streamEvents native v2 session identity", () => {
     }]);
 
     expect(result.childSessionId).toBe("00000000-0000-7000-8000-000000000003");
+    expect(result.childTrace).toEqual({
+      sessionId: "00000000-0000-7000-8000-000000000003",
+    });
   });
 
   it("omits the child session ID when no valid session event arrives", async () => {
@@ -616,5 +619,6 @@ describe("streamEvents native v2 session identity", () => {
     ]);
 
     expect(result.childSessionId).toBeUndefined();
+    expect(result.childTrace).toBeUndefined();
   });
 });

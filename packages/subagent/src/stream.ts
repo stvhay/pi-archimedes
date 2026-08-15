@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { ChildProcess } from "node:child_process";
 import type { ResolvedChildExecution, StreamState, SubagentProgress, SubagentResult } from "./types.js";
-import { getBus, Events } from "@pi-archimedes/core/bus";
+import { getBus, Events, type TodoUpdatePayload } from "@pi-archimedes/core/bus";
 import { decodeLimitStop } from "./limits.js";
 import { decodeOutputLimitEvidence } from "./output-limit.js";
 import { scheduleTerminateChild } from "./spawn.js";
@@ -310,7 +310,7 @@ export function streamEvents(
             if (Array.isArray(todoList)) {
               getBus().emit(Events.TODOS_UPDATE, {
                 source: `subagent:${callbacks.agent ?? "general"}`,
-                todos: todoList,
+                todos: todoList as TodoUpdatePayload["todos"],
               });
             }
           }
@@ -397,7 +397,10 @@ export function streamEvents(
       const result: SubagentResult = {
         agent: callbacks.agent ?? "subagent",
         task: callbacks.task ?? "",
-        ...(state.childSessionId ? { childSessionId: state.childSessionId } : {}),
+        ...(state.childSessionId ? {
+          childSessionId: state.childSessionId,
+          childTrace: { sessionId: state.childSessionId },
+        } : {}),
         exitCode,
         provider: state.provider,
         model: state.model,

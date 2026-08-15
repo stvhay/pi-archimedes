@@ -266,11 +266,14 @@ export function registerAsk(pi: ExtensionAPI) {
 		}
 
 		// Build results matching the request's questions
-		const results = questions.map((q, i) => ({
-			id: q.id,
-			selectedOptions: selections[i]?.selectedOptions ?? [],
-			customInput: selections[i]?.customInput,
-		}));
+		const results = questions.map((q, i) => {
+			const customInput = selections[i]?.customInput;
+			return {
+				id: q.id,
+				selectedOptions: selections[i]?.selectedOptions ?? [],
+				...(customInput !== undefined ? { customInput } : {}),
+			};
+		});
 
 		// Emit on bus — parent's streamEvents writes to child socket
 		getBus().emit(Events.ASK_RESPONSE, {

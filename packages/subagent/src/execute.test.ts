@@ -148,6 +148,7 @@ describe("executeSubagent", () => {
       signal: undefined,
       onUpdate: undefined,
       execution,
+      outputContract: "artifact",
     });
 
     expect(spawnSubagentMock).toHaveBeenCalledWith(expect.objectContaining({ execution }));
@@ -156,6 +157,7 @@ describe("executeSubagent", () => {
       ...execution,
       outputLimit: { requested: 16_384, enforcement: "unsupported" },
     });
+    expect(executed.outputContract).toBe("artifact");
   });
 
   it("preserves execution evidence when spawn fails", async () => {
@@ -175,9 +177,11 @@ describe("executeSubagent", () => {
       signal: undefined,
       onUpdate: undefined,
       execution,
+      outputContract: "status-only",
     });
 
     expect(executed.execution).toEqual(execution);
+    expect(executed.outputContract).toBe("status-only");
     expect(executed.termination).toMatchObject({ reason: "process-error" });
   });
 });

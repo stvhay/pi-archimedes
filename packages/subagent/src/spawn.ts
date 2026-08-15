@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { getBus, Events } from "@pi-archimedes/core/bus";
+import { getBus, Events, type AskRequestPayload } from "@pi-archimedes/core/bus";
 import type { AgentConfig } from "./agents.js";
 import { ONE_SHOT_SYSTEM_PROMPT } from "./execution-profile.js";
 import { encodeLimitsEnvironment, SUBAGENT_LIMITS_ENV } from "./limits.js";
@@ -149,7 +149,7 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
             getBus().emit(Events.ASK_REQUEST, {
               source: `subagent:${agentName}`,
               requestId: msg.requestId,
-              questions: msg.questions,
+              questions: msg.questions as AskRequestPayload["questions"],
             });
           }
         } catch {

@@ -27,6 +27,7 @@
 | 23 | [Bounded subagent execution on v2.1.0](done/2026-08-09-bounded-subagent-execution-v2.md) | ✅ COMPLETED | 2026-08-15 |
 | 24 | [Subagent one-shot mode and output caps on v2.1.0](done/2026-08-09-subagent-one-shot-output-caps-v2.md) | ✅ COMPLETED | 2026-08-15 |
 | 25 | [Repeated subagent error breaker on v2.1.0](done/2026-08-09-repeated-error-breaker-v2.md) | ✅ COMPLETED | 2026-08-15 |
+| 26 | [Public subagent result ports](done/2026-08-15-public-subagent-result-ports.md) | ✅ COMPLETED | 2026-08-15 |
 
 > **Notes:****
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -34,6 +35,6 @@
 
 ## Quick Stats
 
-- Total Plans: 25
-- Completed: 25
+- Total Plans: 26
+- Completed: 26
 - In Progress: 0
