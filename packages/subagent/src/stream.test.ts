@@ -127,6 +127,25 @@ describe("streamEvents bounded termination", () => {
     expect(result.termination).toMatchObject({ reason: "output-limit", limit: 16_384 });
   });
 
+  it("keeps the first output-limit termination when later failures repeat", async () => {
+    const child = fakeChild();
+    const pending = streamEvents(child);
+
+    child.stderr.write(`${encodeLimitStop({
+      reason: "output-limit",
+      limit: 16_384,
+      observed: 16_384,
+      usageState: "complete",
+    })}\n`);
+    toolResult(child, "call-1", "/missing");
+    toolResult(child, "call-2", "/missing");
+    toolResult(child, "call-3", "/missing");
+    child.emit("close", 0, null);
+
+    expect(child.kill).not.toHaveBeenCalled();
+    expect((await pending).termination).toMatchObject({ reason: "output-limit" });
+  });
+
   it("preserves in-flight output and usage when a child limit marker arrives", async () => {
     const child = fakeChild();
     const pending = streamEvents(child);
