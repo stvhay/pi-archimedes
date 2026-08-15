@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { ChildProcess } from "node:child_process";
 import type { ResolvedChildExecution, StreamState, SubagentProgress, SubagentResult } from "./types.js";
@@ -22,6 +23,55 @@ export interface StreamCallbacks {
   task?: string;
   execution?: ResolvedChildExecution;
   onProgress?: (progress: SubagentProgress) => void;
+}
+
+const REPEATED_ERROR_LIMIT = 3;
+const MAX_FINGERPRINT_DEPTH = 64;
+const MAX_FINGERPRINT_NODES = 10_000;
+const MAX_FINGERPRINT_CHARS = 256_000;
+// ponytail: cap malformed-stream state; use a bounded LRU if legitimate children exceed 1,000 tools.
+const MAX_TRACKED_TOOL_CALL_IDS = 1_000;
+
+function canonicalJsonValue(
+  value: unknown,
+  depth = 0,
+  budget = { nodes: MAX_FINGERPRINT_NODES, chars: MAX_FINGERPRINT_CHARS },
+): unknown {
+  if (depth > MAX_FINGERPRINT_DEPTH) throw new RangeError("fingerprint input is too deep");
+  if (--budget.nodes < 0) throw new RangeError("fingerprint input is too large");
+  if (typeof value === "string") {
+    budget.chars -= value.length;
+    if (budget.chars < 0) throw new RangeError("fingerprint input is too large");
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > budget.nodes) throw new RangeError("fingerprint input is too large");
+    return value.map((item) => canonicalJsonValue(item, depth + 1, budget));
+  }
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const keys: string[] = [];
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    if (keys.length >= budget.nodes) throw new RangeError("fingerprint input is too large");
+    budget.chars -= key.length;
+    if (budget.chars < 0) throw new RangeError("fingerprint input is too large");
+    keys.push(key);
+  }
+  keys.sort();
+  return Object.fromEntries(
+    keys.map((key) => [key, canonicalJsonValue(record[key], depth + 1, budget)]),
+  );
+}
+
+function fingerprint(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(canonicalJsonValue(value));
+    if (typeof json !== "string" || json.length > MAX_FINGERPRINT_CHARS) return undefined;
+    return createHash("sha256").update(json).digest("hex");
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -80,6 +130,57 @@ export function streamEvents(
     const stderrLines: string[] = [];
     let error: string | undefined;
     let termination = undefined as SubagentResult["termination"];
+    const toolFingerprints = new Map<
+      string,
+      { toolName: string; call?: string } | null
+    >();
+    const seenToolCallIds = new Set<string>();
+    let repeatedErrorTracking = true;
+    let lastErrorFingerprint: string | undefined;
+    let repeatedErrorCount = 0;
+
+    const resetRepeatedErrorStreak = (): void => {
+      lastErrorFingerprint = undefined;
+      repeatedErrorCount = 0;
+    };
+
+    const disableRepeatedErrorTracking = (): void => {
+      repeatedErrorTracking = false;
+      toolFingerprints.clear();
+      seenToolCallIds.clear();
+      resetRepeatedErrorStreak();
+    };
+
+    const observeToolResult = (
+      toolFingerprint: string,
+      result: unknown,
+      isError: boolean,
+    ): void => {
+      if (termination) return;
+      if (!isError) {
+        resetRepeatedErrorStreak();
+        return;
+      }
+
+      const failedResultFingerprint = fingerprint([toolFingerprint, result]);
+      if (!failedResultFingerprint) {
+        resetRepeatedErrorStreak();
+        return;
+      }
+      repeatedErrorCount = failedResultFingerprint === lastErrorFingerprint ? repeatedErrorCount + 1 : 1;
+      lastErrorFingerprint = failedResultFingerprint;
+      if (repeatedErrorCount < REPEATED_ERROR_LIMIT) return;
+
+      termination = {
+        reason: "repeated-error",
+        limit: REPEATED_ERROR_LIMIT,
+        observed: repeatedErrorCount,
+        usageState: "partial",
+      };
+      error = "Subagent stopped: repeated-error";
+      scheduleTerminateChild(child);
+    };
+
     if (child.stderr) {
       const stderrReader = createInterface({ input: child.stderr, crlfDelay: Infinity });
       stderrReader.on("line", (line) => {
@@ -175,6 +276,31 @@ export function streamEvents(
           break;
         }
         case "tool_execution_start": {
+          const toolCallId = typeof event.toolCallId === "string" && event.toolCallId
+            ? event.toolCallId
+            : undefined;
+          const toolCallKey = repeatedErrorTracking && toolCallId
+            ? fingerprint(toolCallId)
+            : undefined;
+          if (toolCallKey) {
+            const duplicate = seenToolCallIds.has(toolCallKey);
+            if (!duplicate && seenToolCallIds.size >= MAX_TRACKED_TOOL_CALL_IDS) {
+              disableRepeatedErrorTracking();
+            } else {
+              seenToolCallIds.add(toolCallKey);
+              if (duplicate) {
+                toolFingerprints.set(toolCallKey, null);
+              } else if (
+                typeof event.toolName === "string" &&
+                event.toolName &&
+                event.args !== undefined
+              ) {
+                const toolName = fingerprint(event.toolName);
+                const call = fingerprint([event.toolName, event.args]);
+                if (toolName) toolFingerprints.set(toolCallKey, { toolName, ...(call ? { call } : {}) });
+              }
+            }
+          }
           handleToolStart(state, event);
           emitProgress();
           // Forward manage_todo_list writes to the parent's todo widget
@@ -191,6 +317,28 @@ export function streamEvents(
           break;
         }
         case "tool_execution_end": {
+          const toolCallId = typeof event.toolCallId === "string" && event.toolCallId
+            ? event.toolCallId
+            : undefined;
+          const toolCallKey = repeatedErrorTracking && toolCallId
+            ? fingerprint(toolCallId)
+            : undefined;
+          const pending = toolCallKey ? toolFingerprints.get(toolCallKey) : undefined;
+          if (toolCallKey && pending === null) {
+            toolFingerprints.delete(toolCallKey);
+          } else if (
+            toolCallKey &&
+            pending &&
+            typeof event.toolName === "string" &&
+            event.toolName &&
+            pending.toolName === fingerprint(event.toolName) &&
+            event.result !== undefined &&
+            typeof event.isError === "boolean"
+          ) {
+            toolFingerprints.delete(toolCallKey);
+            if (pending.call) observeToolResult(pending.call, event.result, event.isError);
+            else resetRepeatedErrorStreak();
+          }
           handleToolEnd(state);
           emitProgress();
           handleToolResult(state, event);

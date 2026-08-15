@@ -14,6 +14,7 @@ Dispatch specialized subagents to offload complex tasks with live TUI streaming,
 - **Trace correlation** — results expose the ephemeral child's logical Pi session UUID as optional `childSessionId` when Pi emits a valid session event
 - **Execution limits** — optional per-child request, tool, token, cost, and wall-time ceilings with structured stop evidence and preserved partial output
 - **One-shot mode** — one isolated provider response with truthful best-effort native output-cap evidence
+- **Repeated-error breaker** — stops one child after three consecutive identical failed tool results without affecting siblings
 - **`/agents` command** — full CRUD TUI for managing agent definitions with model picker, tool picker, and cross-scope collision warnings (available via the meta package)
 
 ## Screenshots
@@ -130,6 +131,8 @@ One-shot mode:
 `maxOutputTokens` is accepted only for one-shot children. The guard clamps known provider payload fields without raising an existing lower cap. Applied evidence reports both requested and exact effective payload ceilings; unsupported payload shapes still run. Pi's Codex Responses payload does not expose a provider output cap and reports `unsupported` rather than sending an invalid field. Any provider `length` stop reports failed `output-limit` termination while retaining all emitted output and usage; when observed output does not reach an applied ceiling, the result does not invent a triggering limit. Cumulative `maxTotalTokens` and `maxCostUsd` are rejected for one-shot because post-response accounting cannot bound its sole call.
 
 Process environment, provider credentials, ordinary Pi settings, and prompt-template discovery remain inherited. A provider-side account or key limit remains the only hard spend ceiling. Headless scripts and durable run-bundle workers remain outside this interactive tool mode.
+
+Every agentic child also stops after three consecutive failed tool results with identical tool names, arguments, and result data. A successful result, changed failure, or valid but unhashable evidence resets the sequence. Correlation and canonicalization are bounded; the detector retains only in-memory SHA-256 fingerprints and reports `repeated-error` termination without exposing raw evidence or fingerprints.
 
 ### Settings
 

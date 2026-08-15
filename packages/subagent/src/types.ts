@@ -53,6 +53,7 @@ export const SUBAGENT_TERMINATION_REASONS = [
   "cost-limit",
   "time-limit",
   "usage-unknown",
+  "repeated-error",
   "process-error",
 ] as const;
 export type SubagentTerminationReason = (typeof SUBAGENT_TERMINATION_REASONS)[number];
