@@ -22,17 +22,35 @@ function options() {
     cwd: "/work",
     signal: undefined,
     agent: undefined,
-    limits: { maxProviderRequests: 2 },
+    execution: {
+      profile: { mode: "agentic" as const, thinking: undefined },
+      limits: { maxProviderRequests: 2 },
+    },
   };
+}
+
+function runOffline(args: string[], limits: { maxProviderRequests: number }, agentDir: string) {
+  const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const codingAgentPackage = realpathSync(join(
+    packageRoot,
+    "node_modules/@earendil-works/pi-coding-agent",
+  ));
+  return spawnSync(process.execPath, [join(codingAgentPackage, "dist/cli.js"), ...args], {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: buildSpawnEnvironment("unused.sock", limits, {
+      ...process.env,
+      PI_CODING_AGENT_DIR: agentDir,
+      PI_OFFLINE: "1",
+    }),
+  });
 }
 
 describe("bounded spawn", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("loads the dedicated child guard and preserves existing isolation args", () => {
-    const args = buildSubagentArgs(options(), "/package/src/child-guard.ts");
-
-    expect(args).toEqual([
+  it("loads the dedicated child guard and preserves existing agentic args", () => {
+    expect(buildSubagentArgs(options(), "/package/src/child-guard.ts")).toEqual([
       "--mode", "json", "--no-session", "-p",
       "--model", "openai/gpt-5",
       "--extension", "/package/src/child-guard.ts",
@@ -46,7 +64,55 @@ describe("bounded spawn", () => {
     expect(resolveEffectiveModel({ ...options(), model: undefined, activeModel: "parent/model" })).toBe("parent/model");
   });
 
-  it("loads the real child guard with the limits environment", () => {
+  it("isolates one-shot children while explicitly loading only the guard", () => {
+    const args = buildSubagentArgs({
+      ...options(),
+      agent: {
+        name: "reviewer",
+        description: "review",
+        source: "user",
+        filePath: "/agents/reviewer.md",
+        model: "openai/gpt-5",
+        thinking: "high",
+        tools: ["read", "bash"],
+        systemPrompt: "Agent review prompt",
+      },
+      execution: {
+        profile: { mode: "one-shot", thinking: "high" },
+        limits: { maxProviderRequests: 1 },
+      },
+    }, "/package/src/child-guard.ts");
+
+    expect(args).toEqual([
+      "--mode", "json", "--no-session", "-p",
+      "--model", "openai/gpt-5",
+      "--thinking", "high",
+      "--no-tools",
+      "--no-extensions",
+      "--no-skills",
+      "--no-context-files",
+      "--system-prompt", "Agent review prompt",
+      "--extension", "/package/src/child-guard.ts",
+      "review this",
+    ]);
+    expect(args).not.toContain("--no-prompt-templates");
+    expect(args).not.toContain("--tools");
+  });
+
+  it("uses the packet-only prompt and explicit thinking without an agent", () => {
+    const args = buildSubagentArgs({
+      ...options(),
+      execution: {
+        profile: { mode: "one-shot", thinking: "low" },
+        limits: { maxProviderRequests: 1 },
+      },
+    }, "/package/src/child-guard.ts");
+
+    expect(args).toContain("low");
+    expect(args).toContain("You are a read-only peer. Treat the task as a complete context packet. You have no tools or ambient project context. Return one final response.");
+  });
+
+  it("loads the real child guard for bounded agentic execution", () => {
     const temp = mkdtempSync(join(tmpdir(), "archimedes-child-guard-"));
     const agentDir = join(temp, "agent");
     const markerExtension = join(temp, "marker.ts");
@@ -55,28 +121,13 @@ describe("bounded spawn", () => {
       process.stderr.write("EXPLICIT_EXTENSION_LOADED\\n");
       pi.on("input", () => ({ action: "handled" }));
     }`);
-    const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-    const codingAgentPackage = realpathSync(join(
-      packageRoot,
-      "node_modules/@earendil-works/pi-coding-agent",
-    ));
-    const cli = join(codingAgentPackage, "dist/cli.js");
-    const childGuard = join(packageRoot, "src/child-guard.ts");
+    const childGuard = join(dirname(fileURLToPath(import.meta.url)), "child-guard.ts");
     const spawnOptions = { ...options(), model: undefined };
     const args = buildSubagentArgs(spawnOptions, childGuard);
     args.splice(-1, 0, "--extension", markerExtension);
 
     try {
-      const result = spawnSync(process.execPath, [cli, ...args], {
-        encoding: "utf8",
-        timeout: 10_000,
-        env: buildSpawnEnvironment("unused.sock", spawnOptions.limits, {
-          ...process.env,
-          PI_CODING_AGENT_DIR: agentDir,
-          PI_OFFLINE: "1",
-        }),
-      });
-
+      const result = runOffline(args, spawnOptions.execution.limits, agentDir);
       expect(result.status).toBe(0);
       expect(result.stderr).toContain("EXPLICIT_EXTENSION_LOADED");
     } finally {
@@ -84,8 +135,44 @@ describe("bounded spawn", () => {
     }
   });
 
-  it("does not load the guard for an unlimited child", () => {
-    const args = buildSubagentArgs({ ...options(), limits: undefined }, "/missing/child-guard.ts");
+  it("loads explicit extensions in one-shot mode with discovery disabled", () => {
+    const temp = mkdtempSync(join(tmpdir(), "archimedes-one-shot-"));
+    const agentDir = join(temp, "agent");
+    const extension = join(temp, "marker.ts");
+    mkdirSync(agentDir);
+    writeFileSync(extension, `export default function (pi) {
+      process.stderr.write("EXPLICIT_EXTENSION_LOADED\\n");
+      pi.on("input", () => ({ action: "handled" }));
+    }`);
+    const childGuard = join(dirname(fileURLToPath(import.meta.url)), "child-guard.ts");
+    const spawnOptions = {
+      ...options(),
+      model: undefined,
+      execution: {
+        profile: { mode: "one-shot" as const, thinking: "low" },
+        limits: { maxProviderRequests: 1 },
+      },
+    };
+    const args = buildSubagentArgs(spawnOptions, childGuard);
+    args.splice(-1, 0, "--extension", extension);
+
+    try {
+      const result = runOffline(args, spawnOptions.execution.limits, agentDir);
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("EXPLICIT_EXTENSION_LOADED");
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not load the guard for an unlimited agentic child", () => {
+    const args = buildSubagentArgs({
+      ...options(),
+      execution: {
+        profile: { mode: "agentic", thinking: undefined },
+        limits: undefined,
+      },
+    }, "/missing/child-guard.ts");
 
     expect(args).not.toContain("--extension");
     expect(args).not.toContain("/missing/child-guard.ts");

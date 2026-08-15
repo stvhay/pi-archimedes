@@ -25,6 +25,7 @@
 | 21 | [Auto session naming](done/plan-021-session-name.md) | ✅ COMPLETED (PR #29) | 2026-08-13 |
 | 22 | [Subagent: thinking level in agents.local.json](done/plan-022-subagent-thinking-local-json.md) | ✅ COMPLETED (squash `c3cc7ab`) | 2026-08-15 |
 | 23 | [Bounded subagent execution on v2.1.0](done/2026-08-09-bounded-subagent-execution-v2.md) | ✅ COMPLETED | 2026-08-15 |
+| 24 | [Subagent one-shot mode and output caps on v2.1.0](done/2026-08-09-subagent-one-shot-output-caps-v2.md) | ✅ COMPLETED | 2026-08-15 |
 
 > **Notes:****
 > - Diff wide-character width overflow fix (PR #14, 2026-07-03) — no plan file.
@@ -32,6 +33,6 @@
 
 ## Quick Stats
 
-- Total Plans: 23
-- Completed: 23
+- Total Plans: 24
+- Completed: 24
 - In Progress: 0
