@@ -610,6 +610,78 @@ describe("streamEvents bounded termination", () => {
   });
 });
 
+describe("streamEvents activity control", () => {
+  it("reports only runtime-valid known child events as activity", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeChild();
+      const onActivity = vi.fn();
+      const onSettled = vi.fn();
+      const pending = streamEvents(child, { onActivity, onSettled });
+
+      child.stdout.write("not-json\nnull\n[]\n{}\n");
+      writeEvent(child, { type: "unknown" });
+      writeEvent(child, { type: "session" });
+      writeEvent(child, { type: "message_update" });
+      writeEvent(child, { type: "message_update", assistantMessageEvent: { type: "bogus" } });
+      writeEvent(child, { type: "message_update", message: { role: "assistant", content: [] } });
+      writeEvent(child, { type: "auto_retry_start" });
+      writeEvent(child, { type: "compaction_start", reason: "bogus" });
+      writeEvent(child, { type: "tool_execution_update", toolCallId: "call-1" });
+      expect(onActivity).not.toHaveBeenCalled();
+
+      writeEvent(child, { type: "session", id: "00000000-0000-7000-8000-000000000003" });
+      writeEvent(child, { type: "turn_start" });
+      writeEvent(child, assistantDelta("text_delta", 0, "working"));
+      writeEvent(child, {
+        type: "tool_execution_update",
+        toolCallId: "call-1",
+        toolName: "bash",
+        args: { command: "check" },
+        partialResult: { content: [] },
+      });
+      writeEvent(child, { type: "compaction_start", reason: "threshold" });
+      writeEvent(child, { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: "retry" });
+      expect(onActivity).toHaveBeenCalledTimes(6);
+
+      vi.advanceTimersByTime(2000);
+      expect(onActivity).toHaveBeenCalledTimes(6);
+      child.emit("close", 0, null);
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a worker limit before the process closes", async () => {
+    const child = fakeChild();
+    const onTermination = vi.fn();
+    const pending = streamEvents(child, { onTermination });
+    const termination = {
+      reason: "request-limit" as const,
+      limit: 2,
+      observed: 2,
+      usageState: "complete" as const,
+    };
+
+    child.stderr.write(`${encodeLimitStop(termination)}\n`);
+    expect(onTermination).toHaveBeenCalledWith(termination);
+    child.emit("close", 1, null);
+
+    expect((await pending).termination).toEqual(termination);
+  });
+
+  it("settles when the child has no stdout pipe", async () => {
+    const child = fakeChild();
+    const onSettled = vi.fn();
+    Object.assign(child, { stdout: undefined });
+
+    await expect(streamEvents(child, { onSettled })).rejects.toThrow("no stdout");
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+});
+
 async function finishWith(events: Array<Record<string, unknown>>) {
   const child = fakeChild();
   const result = streamEvents(child);

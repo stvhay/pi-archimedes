@@ -18,13 +18,25 @@ import {
   executeParallel,
   executeSubagent,
 } from "./execute.js";
-import type { ExecuteOptions } from "./execute.js";
+import type { ExecuteOptions, ExecutionControl, ExecutionStopCause } from "./execute.js";
 import type { SubagentResult } from "./types.js";
 
 const agenticExecution = () => ({
   profile: { mode: "agentic" as const, thinking: undefined },
   limits: undefined,
 });
+
+function stoppedControl(cause: ExecutionStopCause): ExecutionControl {
+  return {
+    signal: new AbortController().signal,
+    noteActivity: vi.fn(),
+    pauseIdle: vi.fn(),
+    resumeIdle: vi.fn(),
+    recordWorkerStop: vi.fn(),
+    settle: vi.fn(),
+    stopCause: () => cause,
+  };
+}
 
 function result(task: string, exitCode: number): SubagentResult {
   return {
@@ -52,35 +64,126 @@ function result(task: string, exitCode: number): SubagentResult {
 }
 
 describe("createExecutionControl", () => {
-  it("aborts one child at its deadline and records timeout state", async () => {
-    const control = createExecutionControl(undefined, 5);
+  it("aborts after one idle window and records time since child activity", () => {
+    vi.useFakeTimers();
+    try {
+      const control = createExecutionControl(undefined, { maxIdleMs: 1000 });
 
-    await new Promise<void>((resolve) => {
-      control.signal.addEventListener("abort", () => resolve(), { once: true });
-    });
+      vi.advanceTimersByTime(1000);
+      expect(control.signal.aborted).toBe(false);
+      control.noteActivity();
+      vi.advanceTimersByTime(1000);
 
-    expect(control.signal.aborted).toBe(true);
-    expect(control.timedOut()).toBe(true);
+      expect(control.signal.aborted).toBe(true);
+      expect(control.stopCause()).toEqual({ reason: "idle-limit", limit: 1000, observed: 1000 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("propagates parent cancellation without calling it a timeout", () => {
-    const parent = new AbortController();
-    const control = createExecutionControl(parent.signal, 1000);
+  it("renews the idle window after valid child activity", () => {
+    vi.useFakeTimers();
+    try {
+      const control = createExecutionControl(undefined, { maxIdleMs: 1000 });
 
-    parent.abort();
+      vi.advanceTimersByTime(900);
+      control.noteActivity();
+      vi.advanceTimersByTime(999);
+      expect(control.signal.aborted).toBe(false);
+      vi.advanceTimersByTime(1);
 
-    expect(control.signal.aborted).toBe(true);
-    expect(control.timedOut()).toBe(false);
+      expect(control.stopCause()).toEqual({ reason: "idle-limit", limit: 1000, observed: 1000 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("keeps parent cancellation provenance after the deadline also expires", async () => {
-    const parent = new AbortController();
-    const control = createExecutionControl(parent.signal, 5);
+  it("pauses idle while waiting for a human and restarts a fresh lease", () => {
+    vi.useFakeTimers();
+    try {
+      const control = createExecutionControl(undefined, { maxIdleMs: 1000 });
 
-    parent.abort();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+      control.noteActivity();
+      vi.advanceTimersByTime(900);
+      control.pauseIdle();
+      vi.advanceTimersByTime(10_000);
+      expect(control.signal.aborted).toBe(false);
+      control.resumeIdle();
+      vi.advanceTimersByTime(1000);
 
-    expect(control.timedOut()).toBe(false);
+      expect(control.stopCause()).toEqual({ reason: "idle-limit", limit: 1000, observed: 1000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the absolute deadline despite continuous activity", () => {
+    vi.useFakeTimers();
+    try {
+      const control = createExecutionControl(undefined, { maxDurationMs: 2000, maxIdleMs: 1000 });
+
+      vi.advanceTimersByTime(900);
+      control.noteActivity();
+      vi.advanceTimersByTime(900);
+      control.noteActivity();
+      vi.advanceTimersByTime(200);
+
+      expect(control.stopCause()).toEqual({ reason: "time-limit", limit: 2000, observed: 2000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses deterministic hard-first precedence when deadlines tie", () => {
+    vi.useFakeTimers();
+    try {
+      const control = createExecutionControl(undefined, { maxDurationMs: 1000, maxIdleMs: 1000 });
+
+      vi.advanceTimersByTime(1000);
+
+      expect(control.stopCause()?.reason).toBe("time-limit");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves parent-first and worker-first provenance", () => {
+    vi.useFakeTimers();
+    try {
+      const parentFirst = new AbortController();
+      const parentControl = createExecutionControl(parentFirst.signal, { maxDurationMs: 1000, maxIdleMs: 500 });
+      parentFirst.abort();
+      parentControl.recordWorkerStop({ reason: "request-limit", limit: 1, observed: 1, usageState: "complete" });
+      vi.advanceTimersByTime(1000);
+      expect(parentControl.stopCause()).toEqual({ reason: "user-abort" });
+
+      const workerFirst = new AbortController();
+      const workerControl = createExecutionControl(workerFirst.signal, { maxDurationMs: 1000, maxIdleMs: 500 });
+      workerControl.recordWorkerStop({ reason: "request-limit", limit: 1, observed: 1, usageState: "complete" });
+      workerFirst.abort();
+      vi.advanceTimersByTime(1000);
+      expect(workerControl.stopCause()).toMatchObject({
+        reason: "worker",
+        termination: { reason: "request-limit" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles without a later abort or cause", () => {
+    vi.useFakeTimers();
+    try {
+      const control = createExecutionControl(undefined, { maxDurationMs: 1000, maxIdleMs: 500 });
+      control.settle();
+
+      vi.advanceTimersByTime(1000);
+
+      expect(control.signal.aborted).toBe(false);
+      expect(control.stopCause()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -89,12 +192,49 @@ describe("applyControlTermination", () => {
     const controlled = applyControlTermination(
       result("clean", 0),
       { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: { profile: { mode: "agentic", thinking: undefined }, limits: { maxDurationMs: 1000 } } },
-      { signal: new AbortController().signal, timedOut: () => true },
+      stoppedControl({ reason: "time-limit", limit: 1000, observed: 1001 }),
       1001,
     );
 
     expect(controlled.exitCode).toBe(2);
     expect(controlled.termination).toMatchObject({ reason: "time-limit", limit: 1000, observed: 1001 });
+  });
+
+  it("classifies a clean child exit after idle expiry as idle-limit", () => {
+    const controlled = applyControlTermination(
+      result("clean", 0),
+      { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: { profile: { mode: "agentic", thinking: undefined }, limits: { maxIdleMs: 1000 } } },
+      stoppedControl({ reason: "idle-limit", limit: 1000, observed: 1001 }),
+      5000,
+    );
+
+    expect(controlled.exitCode).toBe(2);
+    expect(controlled.termination).toMatchObject({ reason: "idle-limit", limit: 1000, observed: 1001 });
+  });
+
+  it("marks idle usage partial even when no text was emitted", () => {
+    const noText = { ...result("usage-only", 0), finalOutput: undefined };
+    const controlled = applyControlTermination(
+      noText,
+      { task: "usage-only", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: { profile: { mode: "agentic", thinking: undefined }, limits: { maxIdleMs: 1000 } } },
+      stoppedControl({ reason: "idle-limit", limit: 1000, observed: 1000 }),
+      5000,
+    );
+
+    expect(controlled.termination).toMatchObject({ reason: "idle-limit", usageState: "partial" });
+  });
+
+  it("preserves an earlier worker limit when parent cancellation follows", () => {
+    const limited = result("limited", 2);
+    const controlled = applyControlTermination(
+      limited,
+      { task: "limited", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: undefined, onUpdate: undefined, execution: agenticExecution() },
+      stoppedControl({ reason: "worker", termination: limited.termination! }),
+      10,
+    );
+
+    expect(controlled).toBe(limited);
+    expect(controlled.termination?.reason).toBe("request-limit");
   });
 
   it("classifies a clean child exit after parent abort as user-abort", () => {
@@ -103,7 +243,7 @@ describe("applyControlTermination", () => {
     const controlled = applyControlTermination(
       result("clean", 0),
       { task: "clean", agent: undefined, agentConfig: undefined, model: undefined, activeModel: undefined, cwd: undefined, signal: parent.signal, onUpdate: undefined, execution: agenticExecution() },
-      { signal: parent.signal, timedOut: () => false },
+      stoppedControl({ reason: "user-abort" }),
       10,
     );
 
@@ -158,6 +298,33 @@ describe("executeSubagent", () => {
       outputLimit: { requested: 16_384, enforcement: "unsupported" },
     });
     expect(executed.outputContract).toBe("artifact");
+  });
+
+  it("preserves a worker stop when the event stream then rejects", async () => {
+    streamEventsMock.mockImplementationOnce(async (_child, callbacks) => {
+      callbacks.onTermination({ reason: "request-limit", limit: 4, observed: 4, usageState: "complete" });
+      throw new Error("stream failed during shutdown");
+    });
+
+    const executed = await executeSubagent({
+      agent: undefined,
+      agentConfig: undefined,
+      task: "worker-first",
+      model: undefined,
+      activeModel: undefined,
+      cwd: undefined,
+      signal: undefined,
+      onUpdate: undefined,
+      execution: { profile: { mode: "agentic", thinking: undefined }, limits: { maxProviderRequests: 4 } },
+    });
+
+    expect(executed.exitCode).toBe(2);
+    expect(executed.termination).toEqual({
+      reason: "request-limit",
+      limit: 4,
+      observed: 4,
+      usageState: "complete",
+    });
   });
 
   it("preserves execution evidence when spawn fails", async () => {

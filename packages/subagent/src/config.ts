@@ -18,6 +18,7 @@ export const DEFAULT_SUBAGENT_CONFIG: SubagentConfig = {
     maxTotalTokens: 0,
     maxCostUsd: 0,
     maxDurationMs: 0,
+    maxIdleMs: 0,
   },
 };
 
@@ -64,6 +65,7 @@ export function getSubagentSettingsItems(config = loadSubagentConfig()): Setting
     setting("subagentMaxTotalTokens", "Subagent Max Total Tokens", "Per-child input, output, and cache tokens; 0 is unlimited", config.defaultLimits.maxTotalTokens),
     setting("subagentMaxCostUsd", "Subagent Max Cost USD", "Observed per-child cost in USD; 0 is unlimited", config.defaultLimits.maxCostUsd),
     setting("subagentMaxDurationMs", "Subagent Max Duration", "Per-child wall time in milliseconds; 0 is unlimited", config.defaultLimits.maxDurationMs),
+    setting("subagentMaxIdleMs", "Subagent Max Idle", "Milliseconds between valid child activity events; 0 is unlimited", config.defaultLimits.maxIdleMs),
   ];
 }
 

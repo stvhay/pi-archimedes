@@ -74,7 +74,7 @@ Dispatch work to other agents and watch them work in real time.
 - Sub-agent dispatch with live TUI streaming
 - Parallel execution mode
 - Per-subagent tool counts and current-turn/cumulative token usage
-- Optional request, tool, token, cost, wall-time, and fanout limits
+- Optional request, tool, token, cost, wall-time, inactivity, and fanout limits
 - Cold one-shot mode with best-effort provider-native output caps
 - Unified cost summary
 - Color-coded tool calls — grey while running, green/red on completion
@@ -201,9 +201,10 @@ Uses Pi's core `terminal.showImages` setting to control inline previews. No pack
 | `defaultLimits.maxToolCalls` | number | `0` | Per-child tool calls; `0` is unlimited |
 | `defaultLimits.maxTotalTokens` | number | `0` | Per-child input, output, and cache tokens; `0` is unlimited |
 | `defaultLimits.maxCostUsd` | number | `0` | Observed per-child cost in USD; `0` is unlimited |
-| `defaultLimits.maxDurationMs` | number | `0` | Per-child wall time in milliseconds; `0` is unlimited, maximum `2,147,483,647` |
+| `defaultLimits.maxDurationMs` | number | `0` | Absolute per-child wall time in milliseconds; `0` is unlimited, maximum `2,147,483,647` |
+| `defaultLimits.maxIdleMs` | number | `0` | Maximum milliseconds between valid child activity events; `0` is unlimited, maximum `2,147,483,647` |
 
-Token and cost limits can overshoot by one provider response. Use provider-side account or key limits for a hard spend ceiling.
+Token and cost limits can overshoot by one provider response. Use provider-side account or key limits for a hard spend ceiling. Human `ask` wait time pauses the idle limit; absolute duration limits continue.
 
 ### [`@pi-archimedes/ask`](packages/ask/README.md)
 

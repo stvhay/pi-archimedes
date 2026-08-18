@@ -11,6 +11,11 @@ import { ONE_SHOT_SYSTEM_PROMPT } from "./execution-profile.js";
 import { encodeLimitsEnvironment, SUBAGENT_LIMITS_ENV } from "./limits.js";
 import type { ResolvedChildExecution, SubagentLimits } from "./types.js";
 
+export interface IdleWaitCallbacks {
+  pauseIdle: () => void;
+  resumeIdle: () => void;
+}
+
 export interface SpawnOptions {
   task: string;
   model: string | undefined;
@@ -19,6 +24,7 @@ export interface SpawnOptions {
   signal: AbortSignal | undefined;
   agent: AgentConfig | undefined;
   execution: ResolvedChildExecution;
+  idleWait?: IdleWaitCallbacks | undefined;
 }
 
 export function resolveEffectiveModel(
@@ -88,7 +94,10 @@ function resolvePiBinary(): string {
  *
  * Returns the socket path and a cleanup function.
  */
-function startAskSocketServer(agentName: string): { socketPath: string; cleanup: () => void } {
+export function startAskSocketServer(
+  agentName: string,
+  idleWait?: IdleWaitCallbacks,
+): { socketPath: string; cleanup: () => void } {
   // Use named pipes on Windows, Unix domain sockets elsewhere.
   // Linux socket path limit is 108 chars — keep it short.
   const id = randomUUID().slice(0, 8);
@@ -97,8 +106,15 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
       ? `\\\\.\\pipe\\pi-ask-${id}`
       : path.join(os.tmpdir(), `pi-ask-${id}.sock`);
 
-  // Map of pending ask requests: requestId → write-back callback
-  const pending = new Map<string, (response: unknown) => void>();
+  // Map pending requests to their socket so disconnects release paused idle leases.
+  const pending = new Map<string, { socket: net.Socket; send: (response: unknown) => void }>();
+  const finishPending = (requestId: string, response?: unknown): void => {
+    const request = pending.get(requestId);
+    if (!request) return;
+    pending.delete(requestId);
+    if (response !== undefined) request.send(response);
+    idleWait?.resumeIdle();
+  };
 
   // Listen for ASK_RESPONSE from the bus and route back to the waiting socket conn
   const unsubResponse = getBus().on(Events.ASK_RESPONSE, (payload: unknown) => {
@@ -107,16 +123,12 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
       cancelled: boolean;
       results: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
     };
-    const send = pending.get(data.requestId);
-    if (send) {
-      pending.delete(data.requestId);
-      send({
-        type: "ask_response",
-        requestId: data.requestId,
-        cancelled: data.cancelled,
-        results: data.results,
-      });
-    }
+    finishPending(data.requestId, {
+      type: "ask_response",
+      requestId: data.requestId,
+      cancelled: data.cancelled,
+      results: data.results,
+    });
   });
 
   const server = net.createServer((socket) => {
@@ -136,14 +148,37 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
             requestId: string;
             questions: unknown[];
           };
-          if (msg.type === "ask_request") {
-            // Register write-back so ASK_RESPONSE handler can find this socket
-            pending.set(msg.requestId, (response) => {
-              try {
-                socket.write(JSON.stringify(response) + "\n");
-              } catch {
-                // socket already closed
-              }
+          if (
+            msg.type === "ask_request" &&
+            typeof msg.requestId === "string" &&
+            msg.requestId.length > 0 &&
+            Array.isArray(msg.questions) &&
+            msg.questions.length > 0 &&
+            msg.questions.every((question) => {
+              if (!question || typeof question !== "object" || Array.isArray(question)) return false;
+              const item = question as Record<string, unknown>;
+              return typeof item.id === "string" && item.id.length > 0 &&
+                typeof item.question === "string" && item.question.length > 0 &&
+                Array.isArray(item.options) && item.options.length > 0 &&
+                item.options.every((option) => {
+                  if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+                  const label = (option as Record<string, unknown>).label;
+                  return typeof label === "string" && label.length > 0;
+                });
+            })
+          ) {
+            // A duplicate request ID replaces and releases the prior pending wait.
+            finishPending(msg.requestId);
+            idleWait?.pauseIdle();
+            pending.set(msg.requestId, {
+              socket,
+              send: (response) => {
+                try {
+                  socket.write(JSON.stringify(response) + "\n");
+                } catch {
+                  // socket already closed
+                }
+              },
             });
             // Forward to bus — ask package will show the TUI dialog
             getBus().emit(Events.ASK_REQUEST, {
@@ -158,6 +193,11 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
       }
     });
 
+    socket.on("close", () => {
+      for (const [requestId, request] of pending) {
+        if (request.socket === socket) finishPending(requestId);
+      }
+    });
     socket.on("error", () => { /* connection dropped */ });
   });
 
@@ -165,6 +205,7 @@ function startAskSocketServer(agentName: string): { socketPath: string; cleanup:
 
   const cleanup = () => {
     unsubResponse();
+    for (const requestId of [...pending.keys()]) finishPending(requestId);
     server.close();
     // Named pipes on Windows are cleaned up automatically; only unlink on Unix
     if (process.platform !== "win32") {
@@ -251,7 +292,7 @@ export function scheduleTerminateChild(child: ChildProcess, drainMs = 250): void
 export function spawnSubagent(options: SpawnOptions): ChildProcess {
   const piBinary = resolvePiBinary();
   const agentName = options.agent?.name ?? "general";
-  const { socketPath, cleanup: cleanupSocket } = startAskSocketServer(agentName);
+  const { socketPath, cleanup: cleanupSocket } = startAskSocketServer(agentName, options.idleWait);
   const invocation = buildSpawnInvocation(piBinary, buildSubagentArgs(options));
 
   const child = spawn(invocation.command, invocation.args, {

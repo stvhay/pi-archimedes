@@ -1,16 +1,19 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { spawnSync, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Events, getBus } from "@pi-archimedes/core/bus";
 import {
   buildSpawnEnvironment,
   buildSpawnInvocation,
   buildSubagentArgs,
   resolveEffectiveModel,
   scheduleTerminateChild,
+  startAskSocketServer,
   terminateChild,
 } from "./spawn.js";
 
@@ -45,6 +48,95 @@ function runOffline(args: string[], limits: { maxProviderRequests: number }, age
     }),
   });
 }
+
+describe("ask idle lifecycle", () => {
+  async function connect(socketPath: string) {
+    await vi.waitFor(() => expect(existsSync(socketPath)).toBe(true));
+    const socket = createConnection(socketPath);
+    await once(socket, "connect");
+    return socket;
+  }
+
+  it("pauses idle for a pending human response and resumes after the answer", async () => {
+    const pauseIdle = vi.fn();
+    const resumeIdle = vi.fn();
+    const unsubscribeRequest = getBus().on(Events.ASK_REQUEST, () => undefined);
+    const server = startAskSocketServer("reviewer", { pauseIdle, resumeIdle });
+    const socket = await connect(server.socketPath);
+
+    try {
+      socket.write(`${JSON.stringify({
+        type: "ask_request",
+        requestId: "request-answer",
+        questions: [{ id: "question", question: "Continue?", options: [{ label: "Yes" }] }],
+      })}\n`);
+      await vi.waitFor(() => expect(pauseIdle).toHaveBeenCalledTimes(1));
+
+      getBus().emit(Events.ASK_RESPONSE, {
+        requestId: "request-answer",
+        cancelled: false,
+        results: [],
+      });
+      await vi.waitFor(() => expect(resumeIdle).toHaveBeenCalledTimes(1));
+    } finally {
+      socket.destroy();
+      server.cleanup();
+      unsubscribeRequest();
+    }
+  });
+
+  it("does not pause idle for an invalid empty question packet", async () => {
+    const pauseIdle = vi.fn();
+    const resumeIdle = vi.fn();
+    const unsubscribeRequest = getBus().on(Events.ASK_REQUEST, () => undefined);
+    const server = startAskSocketServer("reviewer", { pauseIdle, resumeIdle });
+    const socket = await connect(server.socketPath);
+
+    try {
+      socket.write([
+        JSON.stringify({ type: "ask_request", requestId: "request-invalid", questions: [] }),
+        JSON.stringify({ type: "ask_request", requestId: "request-invalid-shape", questions: [{ id: "question" }] }),
+        JSON.stringify({ type: "ask_request", requestId: "request-valid", questions: [{ id: "question", question: "Continue?", options: [{ label: "Yes" }] }] }),
+        "",
+      ].join("\n"));
+      await vi.waitFor(() => expect(pauseIdle).toHaveBeenCalledTimes(1));
+      expect(resumeIdle).not.toHaveBeenCalled();
+      getBus().emit(Events.ASK_RESPONSE, {
+        requestId: "request-valid",
+        cancelled: true,
+        results: [],
+      });
+      await vi.waitFor(() => expect(resumeIdle).toHaveBeenCalledTimes(1));
+    } finally {
+      socket.destroy();
+      server.cleanup();
+      unsubscribeRequest();
+    }
+  });
+
+  it("resumes idle when a pending ask socket disconnects", async () => {
+    const pauseIdle = vi.fn();
+    const resumeIdle = vi.fn();
+    const unsubscribeRequest = getBus().on(Events.ASK_REQUEST, () => undefined);
+    const server = startAskSocketServer("reviewer", { pauseIdle, resumeIdle });
+    const socket = await connect(server.socketPath);
+
+    try {
+      socket.write(`${JSON.stringify({
+        type: "ask_request",
+        requestId: "request-disconnect",
+        questions: [{ id: "question", question: "Continue?", options: [{ label: "Yes" }] }],
+      })}\n`);
+      await vi.waitFor(() => expect(pauseIdle).toHaveBeenCalledTimes(1));
+      socket.destroy();
+      await once(socket, "close");
+      await vi.waitFor(() => expect(resumeIdle).toHaveBeenCalledTimes(1));
+    } finally {
+      server.cleanup();
+      unsubscribeRequest();
+    }
+  });
+});
 
 describe("bounded spawn", () => {
   afterEach(() => vi.useRealTimers());

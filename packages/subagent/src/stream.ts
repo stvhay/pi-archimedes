@@ -6,7 +6,7 @@ import { getBus, Events, type TodoUpdatePayload } from "@pi-archimedes/core/bus"
 import { decodeLimitStop } from "./limits.js";
 import { decodeOutputLimitEvidence } from "./output-limit.js";
 import { scheduleTerminateChild } from "./spawn.js";
-import { addUsage, readUsage, toSubagentUsage } from "./usage.js";
+import { addUsage, isUsage, readUsage, toSubagentUsage } from "./usage.js";
 import {
   type JsonEvent,
   handleToolStart,
@@ -23,6 +23,9 @@ export interface StreamCallbacks {
   task?: string;
   execution?: ResolvedChildExecution;
   onProgress?: (progress: SubagentProgress) => void;
+  onActivity?: () => void;
+  onTermination?: (termination: NonNullable<SubagentResult["termination"]>) => void;
+  onSettled?: () => void;
 }
 
 const REPEATED_ERROR_LIMIT = 3;
@@ -74,6 +77,152 @@ function fingerprint(value: unknown): string | undefined {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+const ACTIVITY_EVENT_TYPES = new Set([
+  "session",
+  "agent_start",
+  "agent_end",
+  "agent_settled",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "queue_update",
+  "compaction_start",
+  "compaction_end",
+  "entry_appended",
+  "session_info_changed",
+  "thinking_level_changed",
+  "auto_retry_start",
+  "auto_retry_end",
+  "summarization_retry_scheduled",
+  "summarization_retry_attempt_start",
+  "summarization_retry_finished",
+  "bash_execution_update",
+]);
+
+function isKnownEvent(value: unknown): value is JsonEvent {
+  return isRecord(value) && typeof value.type === "string" && ACTIVITY_EVENT_TYPES.has(value.type);
+}
+
+function isAssistantContentPart(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return typeof value.text === "string";
+  if (value.type === "thinking") return typeof value.thinking === "string";
+  return value.type === "toolCall" &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    isRecord(value.arguments);
+}
+
+function isMessageUpdateActivity(value: Record<string, unknown>): boolean {
+  const message = value.message;
+  if (
+    isRecord(message) &&
+    message.role === "assistant" &&
+    Array.isArray(message.content) &&
+    message.content.every(isAssistantContentPart) &&
+    isUsage(message.usage)
+  ) return true;
+
+  const update = value.assistantMessageEvent;
+  if (!isRecord(update) || !Number.isSafeInteger(update.contentIndex) || (update.contentIndex as number) < 0) {
+    return false;
+  }
+  switch (update.type) {
+    case "text_start":
+    case "thinking_start":
+    case "toolcall_start":
+      return true;
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta":
+      return typeof update.delta === "string";
+    case "text_end":
+    case "thinking_end":
+      return typeof update.content === "string";
+    case "toolcall_end":
+      return isRecord(update.toolCall);
+    default:
+      return false;
+  }
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+const COMPACTION_REASONS = new Set(["manual", "threshold", "overflow"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function isActivityEvent(value: JsonEvent): boolean {
+  switch (value.type) {
+    case "agent_start":
+    case "agent_settled":
+    case "turn_start":
+    case "summarization_retry_finished":
+      return true;
+    case "queue_update":
+      return Array.isArray(value.steering) && Array.isArray(value.followUp);
+    case "compaction_start":
+      return COMPACTION_REASONS.has(value.reason as string);
+    case "compaction_end":
+      return COMPACTION_REASONS.has(value.reason as string) &&
+        typeof value.aborted === "boolean" && typeof value.willRetry === "boolean";
+    case "entry_appended":
+      return isRecord(value.entry);
+    case "session_info_changed":
+      return Object.hasOwn(value, "name") && (value.name === undefined || typeof value.name === "string");
+    case "thinking_level_changed":
+      return THINKING_LEVELS.has(value.level as string);
+    case "auto_retry_start":
+      return isNonNegativeInteger(value.attempt) && isNonNegativeInteger(value.maxAttempts) &&
+        isNonNegativeInteger(value.delayMs) && typeof value.errorMessage === "string";
+    case "auto_retry_end":
+      return typeof value.success === "boolean" && isNonNegativeInteger(value.attempt);
+    case "summarization_retry_scheduled":
+      return isNonNegativeInteger(value.attempt) && isNonNegativeInteger(value.maxAttempts) &&
+        isNonNegativeInteger(value.delayMs) && typeof value.errorMessage === "string";
+    case "summarization_retry_attempt_start":
+      return value.source === "branchSummary" ||
+        (value.source === "compaction" && COMPACTION_REASONS.has(value.reason as string));
+    case "bash_execution_update":
+      return typeof value.delta === "string";
+    case "session":
+      return typeof value.id === "string" && value.id.length > 0;
+    case "agent_end":
+      return Array.isArray(value.messages);
+    case "turn_end":
+      return isRecord(value.message) && Array.isArray(value.toolResults);
+    case "message_start":
+    case "message_end":
+      return isRecord(value.message) && typeof value.message.role === "string";
+    case "message_update":
+      return isMessageUpdateActivity(value as unknown as Record<string, unknown>);
+    case "tool_execution_start":
+      return typeof value.toolCallId === "string" && value.toolCallId.length > 0
+        && typeof value.toolName === "string" && value.toolName.length > 0
+        && Object.hasOwn(value, "args");
+    case "tool_execution_update":
+      return typeof value.toolCallId === "string" && value.toolCallId.length > 0
+        && typeof value.toolName === "string" && value.toolName.length > 0
+        && Object.hasOwn(value, "args") && Object.hasOwn(value, "partialResult");
+    case "tool_execution_end":
+      return typeof value.toolCallId === "string" && value.toolCallId.length > 0
+        && typeof value.toolName === "string" && value.toolName.length > 0
+        && Object.hasOwn(value, "result") && typeof value.isError === "boolean";
+    default:
+      return false;
+  }
+}
+
 /**
  * Stream JSON events from a child `pi --mode json` process and build progress/result.
  *
@@ -87,10 +236,17 @@ export function streamEvents(
 ): Promise<SubagentResult> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      callbacks.onSettled?.();
+    };
 
     // Startup safeguard: if no JSON event arrives within 2 minutes, kill the child.
     const STARTUP_TIMEOUT_MS = 2 * 60 * 1000;
     let startupTimer: NodeJS.Timeout | undefined = setTimeout(() => {
+      settle();
       child.kill("SIGKILL");
       reject(
         new Error(
@@ -177,6 +333,7 @@ export function streamEvents(
         observed: repeatedErrorCount,
         usageState: "partial",
       };
+      callbacks.onTermination?.(termination);
       error = "Subagent stopped: repeated-error";
       scheduleTerminateChild(child);
     };
@@ -192,6 +349,7 @@ export function streamEvents(
         const stop = decodeLimitStop(line);
         if (stop && !termination) {
           termination = stop;
+          callbacks.onTermination?.(termination);
           error = `Subagent stopped: ${stop.reason}`;
           if (stop.reason !== "output-limit") scheduleTerminateChild(child);
         } else if (!stop) {
@@ -247,6 +405,7 @@ export function streamEvents(
     if (!child.stdout) {
       clearStartupTimer();
       clearInterval(heartbeat);
+      settle();
       reject(new Error("subagent child has no stdout pipe"));
       return;
     }
@@ -257,16 +416,21 @@ export function streamEvents(
       const trimmed = line.trim();
       if (!trimmed) return;
 
-      let event: JsonEvent;
+      let parsed: unknown;
       try {
-        event = JSON.parse(trimmed) as JsonEvent;
+        parsed = JSON.parse(trimmed) as unknown;
       } catch {
         // Non-JSON output — ignore (can happen from pi startup messages)
         return;
       }
+      if (!isKnownEvent(parsed)) return;
+      const event = parsed;
 
-      // First real event means model has engaged — cancel startup watchdog
-      clearStartupTimer();
+      if (isActivityEvent(event)) {
+        // First runtime-valid event means model has engaged — cancel startup watchdog.
+        clearStartupTimer();
+        callbacks.onActivity?.();
+      }
 
       switch (event.type) {
         case "session": {
@@ -369,12 +533,13 @@ export function streamEvents(
           handleAgentEnd(state, event);
           break;
         }
-        // Ignore: agent_start, turn_end, tool_execution_update
+        // Valid activity with no local state mutation: agent_start, turn_end, tool_execution_update.
       }
     });
 
     // Handle process exit
     child.on("close", (code) => {
+      settle();
       clearStartupTimer();
       clearInterval(heartbeat);
       const durationMs = Date.now() - startTime;
@@ -438,6 +603,7 @@ export function streamEvents(
     });
 
     child.on("error", (err) => {
+      settle();
       clearStartupTimer();
       clearInterval(heartbeat);
       reject(err);

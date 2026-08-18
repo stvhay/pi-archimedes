@@ -22,6 +22,7 @@ const LIMIT_KEYS = [
   "maxOutputTokens",
   "maxCostUsd",
   "maxDurationMs",
+  "maxIdleMs",
 ] as const satisfies readonly (keyof SubagentLimits)[];
 
 const INTEGER_KEYS = new Set<keyof SubagentLimits>([
@@ -30,6 +31,7 @@ const INTEGER_KEYS = new Set<keyof SubagentLimits>([
   "maxTotalTokens",
   "maxOutputTokens",
   "maxDurationMs",
+  "maxIdleMs",
 ]);
 
 export const SUBAGENT_LIMITS_ENV = "PI_ARCHIMEDES_SUBAGENT_LIMITS";
@@ -56,7 +58,7 @@ export function normalizeLimits(
     if (key === "maxOutputTokens" && !Number.isSafeInteger(raw)) {
       throw new Error(`${key} must be a safe integer`);
     }
-    if (key === "maxDurationMs" && raw > MAX_SUBAGENT_DURATION_MS) {
+    if ((key === "maxDurationMs" || key === "maxIdleMs") && raw > MAX_SUBAGENT_DURATION_MS) {
       throw new Error(`${key} must not exceed ${MAX_SUBAGENT_DURATION_MS}`);
     }
     normalized[key] = raw;

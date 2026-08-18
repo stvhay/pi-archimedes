@@ -75,6 +75,7 @@ describe("subagent limits schema", () => {
       "maxOutputTokens",
       "maxCostUsd",
       "maxDurationMs",
+      "maxIdleMs",
     ]);
     expect(task).toEqual(topLevel);
   });
@@ -90,6 +91,9 @@ describe("subagent limits schema", () => {
     expect(limits?.maxOutputTokens?.description).toContain("one-shot");
     expect(limits?.maxDurationMs?.minimum).toBe(1);
     expect(limits?.maxDurationMs?.maximum).toBe(2_147_483_647);
+    expect(limits?.maxIdleMs?.minimum).toBe(1);
+    expect(limits?.maxIdleMs?.maximum).toBe(2_147_483_647);
+    expect(limits?.maxIdleMs?.description).toContain("child activity");
     expect(limits?.maxCostUsd?.exclusiveMinimum).toBe(0);
   });
 });

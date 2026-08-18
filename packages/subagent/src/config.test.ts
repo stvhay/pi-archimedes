@@ -44,6 +44,7 @@ describe("subagent config", () => {
         maxTotalTokens: 0,
         maxCostUsd: 0,
         maxDurationMs: 0,
+        maxIdleMs: 0,
       },
     });
   });
@@ -84,6 +85,7 @@ describe("subagent config", () => {
       "subagentMaxTotalTokens",
       "subagentMaxCostUsd",
       "subagentMaxDurationMs",
+      "subagentMaxIdleMs",
     ]);
     expect(items.every((item) => item.currentValue === "0")).toBe(true);
   });

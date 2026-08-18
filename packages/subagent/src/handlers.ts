@@ -10,7 +10,24 @@ export type MessageUpdateEvent = {
 export type JsonEvent =
   | Exclude<ExtensionEvent, { type: "message_update" }>
   | MessageUpdateEvent
-  | { type: "session"; id?: unknown };
+  | { type: "session"; id?: unknown }
+  | {
+    type:
+      | "agent_settled"
+      | "queue_update"
+      | "compaction_start"
+      | "compaction_end"
+      | "entry_appended"
+      | "session_info_changed"
+      | "thinking_level_changed"
+      | "auto_retry_start"
+      | "auto_retry_end"
+      | "summarization_retry_scheduled"
+      | "summarization_retry_attempt_start"
+      | "summarization_retry_finished"
+      | "bash_execution_update";
+    [key: string]: unknown;
+  };
 type ToolStartEvent = Extract<ExtensionEvent, { type: "tool_execution_start" }>;
 type ToolEndEvent = Extract<ExtensionEvent, { type: "tool_execution_end" }>;
 type MessageStartEvent = Extract<ExtensionEvent, { type: "message_start" }>;

@@ -34,6 +34,7 @@ const SubagentLimitsSchema = Type.Object({
   maxOutputTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Best-effort provider-native output cap for one-shot children" })),
   maxCostUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Observed cost ceiling in USD; may overshoot by one response" })),
   maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SUBAGENT_DURATION_MS, description: "Maximum wall time in milliseconds for this child" })),
+  maxIdleMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SUBAGENT_DURATION_MS, description: "Maximum milliseconds between valid child activity events" })),
 });
 
 const ExecutionModeSchema = StringEnum(SUBAGENT_EXECUTION_MODES, {

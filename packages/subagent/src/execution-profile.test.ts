@@ -33,15 +33,15 @@ describe("resolveExecutionProfile", () => {
 describe("resolveChildExecution", () => {
   it("composes the one-shot request and output caps with explicit caller limits", () => {
     expect(resolveChildExecution({
-      operatorLimits: { maxDurationMs: 300_000 },
+      operatorLimits: { maxDurationMs: 300_000, maxIdleMs: 180_000 },
       topLevel: {
         mode: "one-shot",
-        limits: { maxProviderRequests: 4, maxOutputTokens: 32_768, maxDurationMs: 240_000 },
+        limits: { maxProviderRequests: 4, maxOutputTokens: 32_768, maxDurationMs: 240_000, maxIdleMs: 120_000 },
       },
-      task: { limits: { maxOutputTokens: 16_384 } },
+      task: { limits: { maxOutputTokens: 16_384, maxIdleMs: 150_000 } },
     })).toEqual({
       profile: { mode: "one-shot", thinking: undefined },
-      limits: { maxProviderRequests: 1, maxOutputTokens: 16_384, maxDurationMs: 240_000 },
+      limits: { maxProviderRequests: 1, maxOutputTokens: 16_384, maxDurationMs: 240_000, maxIdleMs: 120_000 },
     });
   });
 
@@ -88,10 +88,10 @@ describe("one-shot defaults", () => {
   it("enforces one provider request without adding a wall-time limit", () => {
     expect(ONE_SHOT_LIMITS).toEqual({ maxProviderRequests: 1 });
     expect(resolveLimits(
-      { maxDurationMs: 120_000 },
-      { maxProviderRequests: 4, maxDurationMs: 240_000 },
+      { maxDurationMs: 120_000, maxIdleMs: 90_000 },
+      { maxProviderRequests: 4, maxDurationMs: 240_000, maxIdleMs: 60_000 },
       ONE_SHOT_LIMITS,
-    )).toEqual({ maxProviderRequests: 1, maxDurationMs: 120_000 });
+    )).toEqual({ maxProviderRequests: 1, maxDurationMs: 120_000, maxIdleMs: 60_000 });
   });
 
   it("uses a packet-only default system prompt", () => {

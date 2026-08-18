@@ -263,6 +263,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
         case "subagentMaxTotalTokens": subagentConfig.defaultLimits.maxTotalTokens = Number.parseInt(newValue, 10); break;
         case "subagentMaxCostUsd": subagentConfig.defaultLimits.maxCostUsd = Number.parseFloat(newValue); break;
         case "subagentMaxDurationMs": subagentConfig.defaultLimits.maxDurationMs = Number.parseInt(newValue, 10); break;
+        case "subagentMaxIdleMs": subagentConfig.defaultLimits.maxIdleMs = Number.parseInt(newValue, 10); break;
 
         // ── Save ──
         case "save": {

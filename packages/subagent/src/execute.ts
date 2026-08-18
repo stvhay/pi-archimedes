@@ -4,23 +4,111 @@ import { emitCostUpdate } from "./cost.js";
 import { addUsage, fromSubagentUsage } from "./usage.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { AgentConfig } from "./agents.js";
-import type { ResolvedChildExecution, SubagentOutputContract, SubagentProgress, SubagentResult, SubagentUsage } from "./types.js";
+import type {
+  ResolvedChildExecution,
+  SubagentLimits,
+  SubagentOutputContract,
+  SubagentProgress,
+  SubagentResult,
+  SubagentTermination,
+  SubagentUsage,
+} from "./types.js";
+
+export type ExecutionStopCause =
+  | { reason: "time-limit" | "idle-limit"; limit: number; observed: number }
+  | { reason: "user-abort" }
+  | { reason: "worker"; termination: SubagentTermination };
 
 export interface ExecutionControl {
   signal: AbortSignal;
-  timedOut: () => boolean;
+  noteActivity: () => void;
+  pauseIdle: () => void;
+  resumeIdle: () => void;
+  recordWorkerStop: (termination: SubagentTermination) => void;
+  settle: () => void;
+  stopCause: () => ExecutionStopCause | undefined;
 }
 
 export function createExecutionControl(
   parentSignal: AbortSignal | undefined,
-  durationMs: number | undefined,
+  limits: Pick<SubagentLimits, "maxDurationMs" | "maxIdleMs"> | undefined,
 ): ExecutionControl {
-  const timeoutSignal = durationMs === undefined ? undefined : AbortSignal.timeout(durationMs);
-  const signals = [parentSignal, timeoutSignal].filter((signal): signal is AbortSignal => Boolean(signal));
-  const signal = AbortSignal.any(signals);
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  let lastActivityAt: number | undefined;
+  let idlePauseDepth = 0;
+  let settled = false;
+  let cause: ExecutionStopCause | undefined;
+  let hardTimer: NodeJS.Timeout | undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+
+  const clearTimer = (timer: NodeJS.Timeout | undefined): void => {
+    if (timer) clearTimeout(timer);
+  };
+  const abort = (next: ExecutionStopCause): void => {
+    cause ??= next;
+    if (!controller.signal.aborted) controller.abort(cause);
+  };
+  const armIdle = (): void => {
+    clearTimer(idleTimer);
+    idleTimer = undefined;
+    const limit = limits?.maxIdleMs;
+    const activityAt = lastActivityAt;
+    if (settled || cause || idlePauseDepth > 0 || limit === undefined || activityAt === undefined) return;
+    const delay = Math.max(0, activityAt + limit - Date.now());
+    idleTimer = setTimeout(() => {
+      abort({ reason: "idle-limit", limit, observed: Date.now() - activityAt });
+    }, delay);
+    idleTimer.unref?.();
+  };
+  const onParentAbort = (): void => abort({ reason: "user-abort" });
+
+  // Arm the hard timer first so equal deadlines deterministically report the hard ceiling.
+  if (limits?.maxDurationMs !== undefined) {
+    const limit = limits.maxDurationMs;
+    hardTimer = setTimeout(() => {
+      abort({ reason: "time-limit", limit, observed: Date.now() - startedAt });
+    }, limit);
+    hardTimer.unref?.();
+  }
+
+  if (parentSignal?.aborted) onParentAbort();
+  else parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+
   return {
-    signal,
-    timedOut: () => timeoutSignal?.aborted === true && signal.reason === timeoutSignal.reason,
+    signal: controller.signal,
+    noteActivity: () => {
+      if (settled || cause) return;
+      lastActivityAt = Date.now();
+      armIdle();
+    },
+    pauseIdle: () => {
+      if (settled || cause) return;
+      idlePauseDepth++;
+      clearTimer(idleTimer);
+      idleTimer = undefined;
+    },
+    resumeIdle: () => {
+      if (settled || cause || idlePauseDepth === 0) return;
+      idlePauseDepth--;
+      if (idlePauseDepth === 0 && lastActivityAt !== undefined) {
+        lastActivityAt = Date.now();
+        armIdle();
+      }
+    },
+    recordWorkerStop: (termination) => {
+      cause ??= { reason: "worker", termination };
+    },
+    settle: () => {
+      if (settled) return;
+      settled = true;
+      clearTimer(hardTimer);
+      clearTimer(idleTimer);
+      hardTimer = undefined;
+      idleTimer = undefined;
+      parentSignal?.removeEventListener("abort", onParentAbort);
+    },
+    stopCause: () => cause,
   };
 }
 
@@ -60,32 +148,46 @@ export interface ParallelExecuteOptions {
   onUpdate: ((progress: SubagentProgress[]) => void) | undefined;
 }
 
+function interruptedUsageState(result: SubagentResult): "partial" | "unknown" {
+  return result.finalOutput || Object.values(result.usage).some((value) => typeof value === "number" && value > 0)
+    ? "partial"
+    : "unknown";
+}
+
 export function applyControlTermination(
   result: SubagentResult,
   options: ExecuteOptions,
   control: ExecutionControl,
   durationMs: number,
 ): SubagentResult {
-  const reason = result.termination?.reason;
-  if (reason && reason !== "completed" && reason !== "process-error") return result;
-  if (control.timedOut()) {
-    const error = "Subagent stopped: time-limit";
+  const cause = control.stopCause();
+  if (cause?.reason === "worker") {
+    if (result.termination === cause.termination) return result;
+    const error = `Subagent stopped: ${cause.termination.reason}`;
+    return {
+      ...result,
+      exitCode: 2,
+      error,
+      termination: cause.termination,
+      progress: result.progress ? { ...result.progress, status: "failed", error } : result.progress,
+    };
+  }
+  if (cause?.reason === "time-limit" || cause?.reason === "idle-limit") {
+    const error = `Subagent stopped: ${cause.reason}`;
     return {
       ...result,
       exitCode: 2,
       error,
       termination: {
-        reason: "time-limit",
-        ...(options.execution.limits?.maxDurationMs !== undefined
-          ? { limit: options.execution.limits.maxDurationMs }
-          : {}),
-        observed: durationMs,
-        usageState: result.finalOutput ? "partial" : "unknown",
+        reason: cause.reason,
+        limit: cause.limit,
+        observed: cause.observed,
+        usageState: interruptedUsageState(result),
       },
       progress: result.progress ? { ...result.progress, status: "failed", error } : result.progress,
     };
   }
-  if (options.signal?.aborted) {
+  if (cause?.reason === "user-abort") {
     const error = "Subagent cancelled";
     return {
       ...result,
@@ -93,7 +195,7 @@ export function applyControlTermination(
       error,
       termination: {
         reason: "user-abort",
-        usageState: result.finalOutput ? "partial" : "unknown",
+        usageState: interruptedUsageState(result),
       },
       progress: result.progress ? { ...result.progress, status: "failed", error } : result.progress,
     };
@@ -107,7 +209,7 @@ export function applyControlTermination(
 export async function executeSubagent(options: ExecuteOptions): Promise<SubagentResult> {
   const agentName = options.agent ?? "subagent";
   const startTime = Date.now();
-  const control = createExecutionControl(options.signal, options.execution.limits?.maxDurationMs);
+  const control = createExecutionControl(options.signal, options.execution.limits);
 
   // Track previously emitted values to only emit deltas
   let lastEmittedInput = 0;
@@ -125,12 +227,16 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
       signal: control.signal,
       agent: options.agentConfig,
       execution: options.execution,
+      idleWait: { pauseIdle: control.pauseIdle, resumeIdle: control.resumeIdle },
     });
 
     const result = await streamEvents(child, {
       agent: agentName,
       task: options.task,
       execution: options.execution,
+      onActivity: control.noteActivity,
+      onTermination: control.recordWorkerStop,
+      onSettled: control.settle,
       onProgress: (progress: SubagentProgress) => {
         // Emit only deltas to avoid double-counting in CostAccumulator
         const deltaInput = progress.inputTokens - lastEmittedInput;
@@ -159,6 +265,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
     });
 
     // Enrich result with agent name and duration
+    control.settle();
     const durationMs = Date.now() - startTime;
     return applyControlTermination({
       ...result,
@@ -196,6 +303,7 @@ export async function executeSubagent(options: ExecuteOptions): Promise<Subagent
         : { toolCount: 0, tokens: 0, durationMs },
     }, options, control, durationMs);
   } catch (err) {
+    control.settle();
     const errorMessage = err instanceof Error ? err.message : String(err);
     const durationMs = Date.now() - startTime;
     const result: SubagentResult = {

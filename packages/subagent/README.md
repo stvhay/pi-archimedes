@@ -12,7 +12,7 @@ Dispatch specialized subagents to offload complex tasks with live TUI streaming,
 - **Per-agent model override** — each subagent can use its own model, falling back to the parent's selection
 - **Cost tracking** — detailed token usage (input, output, cache read/write) and cost per subagent, emitted through the core bus for the footer to consume
 - **Trace correlation** — results expose the ephemeral child's logical Pi session UUID as optional `childSessionId` when Pi emits a valid session event
-- **Execution limits** — optional per-child request, tool, token, cost, and wall-time ceilings with structured stop evidence and preserved partial output
+- **Execution limits** — optional per-child request, tool, token, cost, absolute wall-time, and sliding inactivity ceilings with structured stop evidence and preserved partial output
 - **One-shot mode** — one isolated provider response with truthful best-effort native output-cap evidence
 - **Repeated-error breaker** — stops one child after three consecutive identical failed tool results without affecting siblings
 - **`/agents` command** — full CRUD TUI for managing agent definitions with model picker, tool picker, and cross-scope collision warnings (available via the meta package)
@@ -93,14 +93,17 @@ Bound one child directly:
     "maxToolCalls": 20,
     "maxTotalTokens": 100000,
     "maxCostUsd": 0.5,
-    "maxDurationMs": 180000
+    "maxDurationMs": 1800000,
+    "maxIdleMs": 180000
   }
 }
 ```
 
 Top-level limits apply to every parallel child. A task may add stricter `limits`; it cannot raise operator or top-level ceilings. Results include a structured `termination` reason and preserve finalized or in-flight output and usage when a child is stopped.
 
-Request, tool-call, fanout, and wall-time limits are enforced before additional work. `maxDurationMs` cannot exceed `2,147,483,647`, the maximum safe Node.js timer delay. Token and cost limits use reported assistant usage, so they may exceed the configured value by one provider response. Keep Pi's `retry.provider.maxRetries` at `0` for bounded runs, and use a provider-side account or key cap when a hard spend ceiling is required.
+Request, tool-call, fanout, and wall-time limits are enforced before additional work. `maxDurationMs` is an absolute child deadline. `maxIdleMs` restarts after each runtime-valid child lifecycle, model-stream, or tool-stream event; malformed output and the parent display heartbeat do not restart it. A bridged human `ask` pauses idle time, while parent cancellation and `maxDurationMs` remain active. The existing two-minute no-event startup safeguard remains separate. Both time values cannot exceed `2,147,483,647`, the maximum safe Node.js timer delay.
+
+An idle limit detects silence, not total work: a continuously active child can run until completion or another configured limit. Use request, tool, token, cost, or absolute duration limits when total work must be bounded. Token and cost limits use reported assistant usage, so they may exceed the configured value by one provider response. Keep Pi's `retry.provider.maxRetries` at `0` for bounded runs, and use a provider-side account or key cap when a hard spend ceiling is required.
 
 Child output parsing accepts legacy cumulative updates and Pi 0.84 delta-only streams. Live reconstructed previews are capped at 12,000 characters; authoritative final output and usage replace partial state when available. Forced stops still return whatever output and usage the child emitted.
 
@@ -120,7 +123,7 @@ Use `one-shot` for a complete read-only packet that needs one response without t
 One-shot mode:
 
 - allows exactly one provider request and rejects nonzero `retry.provider.maxRetries`;
-- has no implicit wall-clock deadline; parent cancellation and explicit `maxDurationMs` still apply;
+- has no implicit wall-clock deadline; parent cancellation and explicit `maxDurationMs` or `maxIdleMs` still apply;
 - disables tools, discovered extensions, skills, context files, and session persistence;
 - leaves prompt-template macros available and explicitly loads only the child guard;
 - uses a packet-only system prompt unless a selected agent supplies one;
@@ -147,7 +150,8 @@ Optional operator defaults live under `archimedes.subagent` in `~/.pi/agent/sett
       "maxToolCalls": 30,
       "maxTotalTokens": 150000,
       "maxCostUsd": 0.75,
-      "maxDurationMs": 300000
+      "maxDurationMs": 1800000,
+      "maxIdleMs": 300000
     }
   }
 }

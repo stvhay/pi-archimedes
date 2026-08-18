@@ -31,6 +31,7 @@ describe("normalizeLimits", () => {
       maxOutputTokens: 0,
       maxCostUsd: 0,
       maxDurationMs: 0,
+      maxIdleMs: 0,
     }, true)).toBeUndefined();
   });
 
@@ -40,6 +41,7 @@ describe("normalizeLimits", () => {
     expect(() => normalizeLimits({ maxCostUsd: Number.POSITIVE_INFINITY }, false)).toThrow("maxCostUsd");
     expect(() => normalizeLimits({ maxOutputTokens: 1.5 }, false)).toThrow("maxOutputTokens");
     expect(() => normalizeLimits({ maxDurationMs: 2_147_483_648 }, false)).toThrow("maxDurationMs");
+    expect(() => normalizeLimits({ maxIdleMs: 2_147_483_648 }, false)).toThrow("maxIdleMs");
   });
 
   it("preserves valid field units", () => {
@@ -50,6 +52,7 @@ describe("normalizeLimits", () => {
       maxOutputTokens: 16_384,
       maxCostUsd: 0.75,
       maxDurationMs: 30_000,
+      maxIdleMs: 45_000,
     }, false)).toEqual({
       maxProviderRequests: 3,
       maxToolCalls: 4,
@@ -57,21 +60,23 @@ describe("normalizeLimits", () => {
       maxOutputTokens: 16_384,
       maxCostUsd: 0.75,
       maxDurationMs: 30_000,
+      maxIdleMs: 45_000,
     });
   });
 });
 
 describe("resolveLimits", () => {
   it("uses the strictest operator, top-level, and task value", () => {
-    const operator: SubagentLimits = { maxProviderRequests: 8, maxCostUsd: 2, maxDurationMs: 60_000 };
-    const topLevel: SubagentLimits = { maxProviderRequests: 6, maxCostUsd: 1.5 };
-    const task: SubagentLimits = { maxProviderRequests: 7, maxCostUsd: 1, maxToolCalls: 12 };
+    const operator: SubagentLimits = { maxProviderRequests: 8, maxCostUsd: 2, maxDurationMs: 60_000, maxIdleMs: 90_000 };
+    const topLevel: SubagentLimits = { maxProviderRequests: 6, maxCostUsd: 1.5, maxIdleMs: 45_000 };
+    const task: SubagentLimits = { maxProviderRequests: 7, maxCostUsd: 1, maxToolCalls: 12, maxIdleMs: 75_000 };
 
     expect(resolveLimits(operator, topLevel, task)).toEqual({
       maxProviderRequests: 6,
       maxToolCalls: 12,
       maxCostUsd: 1,
       maxDurationMs: 60_000,
+      maxIdleMs: 45_000,
     });
   });
 
@@ -210,7 +215,7 @@ describe("BudgetTracker", () => {
 
 describe("limits environment", () => {
   it("round-trips a validated non-empty limit object", () => {
-    const limits = { maxProviderRequests: 2, maxDurationMs: 1000 };
+    const limits = { maxProviderRequests: 2, maxDurationMs: 1000, maxIdleMs: 500 };
     expect(decodeLimitsEnvironment(encodeLimitsEnvironment(limits))).toEqual(limits);
   });
 
@@ -336,14 +341,14 @@ describe("registerChildLimitGuard", () => {
 describe("limit stop marker", () => {
   it("round-trips structured termination evidence", () => {
     const marker = encodeLimitStop({
-      reason: "time-limit",
+      reason: "idle-limit",
       limit: 1000,
       observed: 1001,
       usageState: "partial",
     });
 
     expect(decodeLimitStop(marker)).toEqual({
-      reason: "time-limit",
+      reason: "idle-limit",
       limit: 1000,
       observed: 1001,
       usageState: "partial",

@@ -30,7 +30,10 @@ export interface SubagentLimits {
   /** Provider-native output cap accepted only for one-shot children. */
   maxOutputTokens?: number;
   maxCostUsd?: number;
+  /** Absolute child wall-time ceiling. */
   maxDurationMs?: number;
+  /** Sliding ceiling between valid child activity events. */
+  maxIdleMs?: number;
 }
 
 export interface SubagentExecutionProfile {
@@ -60,6 +63,7 @@ export const SUBAGENT_TERMINATION_REASONS = [
   "output-limit",
   "cost-limit",
   "time-limit",
+  "idle-limit",
   "usage-unknown",
   "repeated-error",
   "process-error",
