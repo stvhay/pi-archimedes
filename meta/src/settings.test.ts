@@ -217,3 +217,32 @@ describe("startupSplash editing", () => {
     );
   });
 });
+
+
+describe("managed subagent settings", () => {
+  it("exposes all seven operator ceilings, including decimal cost", async () => {
+    const items = await buildSettingsItems(loadAllConfig());
+    expect(items.filter((item) => item.id.startsWith("subagentMax")).map((item) => item.id)).toEqual([
+      "subagentMaxParallel", "subagentMaxProviderRequests", "subagentMaxToolCalls",
+      "subagentMaxTotalTokens", "subagentMaxCostUsd", "subagentMaxDurationMs", "subagentMaxIdleMs",
+    ]);
+    expect(PROMPTS.subagentMaxCostUsd).toMatchObject({ kind: "number", min: 0, allowDecimal: true });
+  });
+
+  it("saves subagent limits without modifying saved values during editing", async () => {
+    store["archimedes.subagent"] = { maxParallel: 0, defaultLimits: { maxProviderRequests: 0 } };
+    const before = structuredClone(store["archimedes.subagent"]);
+    const custom = vi.fn((factory: any) => factory({}, {}, {}, () => {}));
+    await openSettings({} as any, { ui: { custom } } as any);
+    const panel = managerCalls.at(-1)!;
+    panel.onChange("subagentMaxParallel", "3");
+    panel.onChange("subagentMaxProviderRequests", "5");
+    panel.onChange("subagentMaxCostUsd", "0.25");
+    panel.onChange("subagentMaxIdleMs", "2500");
+    expect(store["archimedes.subagent"]).toEqual(before);
+    panel.onSave();
+    expect(store["archimedes.subagent"]).toMatchObject({
+      maxParallel: 3, defaultLimits: { maxProviderRequests: 5, maxCostUsd: 0.25, maxIdleMs: 2500 },
+    });
+  });
+});

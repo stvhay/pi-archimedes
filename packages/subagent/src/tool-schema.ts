@@ -1,7 +1,31 @@
 import { Type, type Static } from "typebox";
+import { MAX_SUBAGENT_DURATION_MS, SUBAGENT_EXECUTION_MODES, SUBAGENT_OUTPUT_CONTRACTS, SUBAGENT_THINKING_LEVELS, SUBAGENT_TERMINATION_REASONS, SUBAGENT_USAGE_STATES } from "./types.js";
 import type { SubagentResult, SubagentRunReport } from "./types.js";
 
 // ── JSON Schema for tool parameters (TypeBox) ──────────────────────────────
+
+const SubagentLimitsSchema = Type.Object({
+  maxProviderRequests: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum provider requests for this child" })),
+  maxToolCalls: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum tool calls for this child" })),
+  maxTotalTokens: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum input, output, and cache tokens for this child" })),
+  maxOutputTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, description: "Best-effort provider-native output cap for one-shot children" })),
+  maxCostUsd: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Observed cost ceiling in USD; may overshoot by one response" })),
+  maxDurationMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SUBAGENT_DURATION_MS, description: "Maximum wall time in milliseconds for this child" })),
+  maxIdleMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SUBAGENT_DURATION_MS, description: "Maximum milliseconds between valid child activity events" })),
+});
+
+const ExecutionModeSchema = Type.Unsafe<(typeof SUBAGENT_EXECUTION_MODES)[number]>({
+  type: "string", enum: [...SUBAGENT_EXECUTION_MODES],
+  description: "agentic: normal child with tools and ambient context; one-shot: isolated packet with one provider request",
+});
+const ThinkingLevelSchema = Type.Unsafe<(typeof SUBAGENT_THINKING_LEVELS)[number]>({
+  type: "string", enum: [...SUBAGENT_THINKING_LEVELS],
+  description: "Child thinking level. Agent frontmatter wins, then task-level, then top-level thinking.",
+});
+const OutputContractSchema = Type.Unsafe<(typeof SUBAGENT_OUTPUT_CONTRACTS)[number]>({
+  type: "string", enum: [...SUBAGENT_OUTPUT_CONTRACTS],
+  description: "Caller-supplied result transport label; Archimedes reports but does not evaluate it.",
+});
 
 const TaskItem = Type.Object({
   agent: Type.Optional(Type.String({
@@ -10,6 +34,10 @@ const TaskItem = Type.Object({
   task: Type.String(),
   model: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
+  limits: Type.Optional(SubagentLimitsSchema),
+  mode: Type.Optional(ExecutionModeSchema),
+  thinking: Type.Optional(ThinkingLevelSchema),
+  outputContract: Type.Optional(OutputContractSchema),
 });
 
 export const SUBAGENT_PARAMS_SCHEMA = Type.Object({
@@ -28,6 +56,10 @@ export const SUBAGENT_PARAMS_SCHEMA = Type.Object({
   cwd: Type.Optional(Type.String({
     description: "Working directory for the subagent",
   })),
+  limits: Type.Optional(SubagentLimitsSchema),
+  mode: Type.Optional(ExecutionModeSchema),
+  thinking: Type.Optional(ThinkingLevelSchema),
+  outputContract: Type.Optional(OutputContractSchema),
 });
 
 /**
@@ -70,12 +102,18 @@ export type SubagentParams = Static<typeof SUBAGENT_PARAMS_SCHEMA>;
 // that run's `error` field set inside `results` (pre-existing shape, unchanged
 // by these schemas; see the per-run failure markers in `formatParallelResults`).
 
+const CostBreakdownSchema = Type.Object({
+  input: Type.Number(), output: Type.Number(), cacheRead: Type.Number(),
+  cacheWrite: Type.Number(), total: Type.Number(),
+});
+
 const UsageSchema = Type.Object({
   input: Type.Number(),
   output: Type.Number(),
   cacheRead: Type.Number(),
   cacheWrite: Type.Number(),
   cost: Type.Number(),
+  costBreakdown: Type.Optional(CostBreakdownSchema),
   turns: Type.Number(),
 });
 
@@ -85,11 +123,32 @@ const ProgressSummarySchema = Type.Object({
   durationMs: Type.Number(),
 });
 
-const RunReportSchema = Type.Object({
+const ExecutionSchema = Type.Object({
+  profile: Type.Object({ mode: ExecutionModeSchema, thinking: Type.Optional(Type.String()) }),
+  limits: Type.Optional(SubagentLimitsSchema),
+  outputLimit: Type.Optional(Type.Object({
+    requested: Type.Integer({ minimum: 1 }),
+    effective: Type.Optional(Type.Integer({ minimum: 1 })),
+    enforcement: Type.Union([Type.Literal("applied"), Type.Literal("unsupported")]),
+  })),
+});
+const TerminationSchema = Type.Object({
+  reason: Type.Unsafe<(typeof SUBAGENT_TERMINATION_REASONS)[number]>({ type: "string", enum: [...SUBAGENT_TERMINATION_REASONS] }),
+  limit: Type.Optional(Type.Number({ minimum: 0 })),
+  observed: Type.Optional(Type.Number({ minimum: 0 })),
+  usageState: Type.Unsafe<(typeof SUBAGENT_USAGE_STATES)[number]>({ type: "string", enum: [...SUBAGENT_USAGE_STATES] }),
+});
+
+export const RunReportSchema = Type.Object({
   agent: Type.String(),
   task: Type.String(),
   exitCode: Type.Number(),
   childSessionId: Type.Optional(Type.String()),
+  childTrace: Type.Optional(Type.Object({ sessionId: Type.String(), traceId: Type.Optional(Type.String()) })),
+  provider: Type.Optional(Type.String()),
+  execution: Type.Optional(ExecutionSchema),
+  termination: Type.Optional(TerminationSchema),
+  outputContract: Type.Optional(OutputContractSchema),
   outcome: Type.Optional(
     Type.Union([Type.Literal("completed"), Type.Literal("truncated"), Type.Literal("aborted")]),
   ),
@@ -117,6 +176,18 @@ export function subagentStructuredContent(
       task: result.task,
       exitCode: result.exitCode,
       ...(result.childSessionId !== undefined && { childSessionId: result.childSessionId }),
+      ...(result.childTrace && { childTrace: { ...result.childTrace } }),
+      ...(result.provider !== undefined && { provider: result.provider }),
+      ...(result.outputContract && { outputContract: result.outputContract }),
+      ...(result.termination && { termination: { ...result.termination } }),
+      ...(result.execution && { execution: {
+        profile: {
+          mode: result.execution.profile.mode,
+          ...(result.execution.profile.thinking !== undefined && { thinking: result.execution.profile.thinking }),
+        },
+        ...(result.execution.limits && { limits: { ...result.execution.limits } }),
+        ...(result.execution.outputLimit && { outputLimit: { ...result.execution.outputLimit } }),
+      } }),
       ...(result.outcome !== undefined && { outcome: result.outcome }),
       usage: {
         input: result.usage.input,
@@ -124,6 +195,7 @@ export function subagentStructuredContent(
         cacheRead: result.usage.cacheRead,
         cacheWrite: result.usage.cacheWrite,
         cost: result.usage.cost,
+        ...(result.usage.costBreakdown && { costBreakdown: { ...result.usage.costBreakdown } }),
         turns: result.usage.turns,
       },
       ...(result.model !== undefined && { model: result.model }),

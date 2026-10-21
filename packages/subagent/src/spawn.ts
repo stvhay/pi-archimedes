@@ -4,10 +4,19 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { ONE_SHOT_SYSTEM_PROMPT } from "./execution-profile.js";
+import { encodeLimitsEnvironment, SUBAGENT_LIMITS_ENV } from "./limits.js";
+import type { ResolvedChildExecution, SubagentLimits } from "./types.js";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { Events, emitOn } from "@pi-archimedes/core/events";
 import { resolveThinkingLevel } from "./thinking-validation.js";
 import type { AgentConfig } from "./agents.js";
+
+export interface IdleWaitCallbacks {
+  pauseIdle: () => void;
+  resumeIdle: () => void;
+}
 
 export interface SpawnOptions {
   task: string;
@@ -18,6 +27,8 @@ export interface SpawnOptions {
   agent: AgentConfig | undefined;
   /** The parent's host handle (`pi.events`) — see `startAskSocketServer`. */
   events: EventBus;
+  execution?: ResolvedChildExecution;
+  idleWait?: IdleWaitCallbacks;
 }
 
 /**
@@ -102,7 +113,11 @@ function resolvePiBinary(): string {
  *
  * Returns the socket path and a cleanup function.
  */
-export function startAskSocketServer(agentName: string, events: EventBus): { socketPath: string; cleanup: () => void } {
+export function startAskSocketServer(
+  agentName: string,
+  events: EventBus,
+  idleWait?: IdleWaitCallbacks,
+): { socketPath: string; cleanup: () => void } {
   // Use named pipes on Windows, Unix domain sockets elsewhere.
   // Linux socket path limit is 108 chars — keep it short.
   const id = randomUUID().slice(0, 8);
@@ -111,32 +126,33 @@ export function startAskSocketServer(agentName: string, events: EventBus): { soc
       ? `\\\\.\\pipe\\pi-ask-${id}`
       : path.join(os.tmpdir(), `pi-ask-${id}.sock`);
 
-  // Map of pending ask requests: requestId → write-back callback
-  const pending = new Map<string, (response: unknown) => void>();
+  // Map pending requests to their socket so disconnects release paused idle leases.
+  const pending = new Map<string, { socket: net.Socket; send: (response: unknown) => void }>();
+  const finishPending = (requestId: string, response?: unknown): void => {
+    const request = pending.get(requestId);
+    if (!request) return;
+    pending.delete(requestId);
+    if (response !== undefined) request.send(response);
+    idleWait?.resumeIdle();
+  };
 
-  // Listen for ASK_RESPONSE on the handle and route back to the waiting socket conn
+  // Listen for ASK_RESPONSE from the bus and route back to the waiting socket conn
   const unsubResponse = events.on(Events.ASK_RESPONSE, (payload: unknown) => {
     const data = payload as {
       requestId: string;
       cancelled: boolean;
       results: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
     };
-    const send = pending.get(data.requestId);
-    if (send) {
-      pending.delete(data.requestId);
-      send({
-        type: "ask_response",
-        requestId: data.requestId,
-        cancelled: data.cancelled,
-        results: data.results,
-      });
-    }
+    finishPending(data.requestId, {
+      type: "ask_response",
+      requestId: data.requestId,
+      cancelled: data.cancelled,
+      results: data.results,
+    });
   });
 
   const server = net.createServer((socket) => {
     let buffer = "";
-    // requestIds seen on this socket (for the ASK_CANCEL wiring below)
-    const socketRequestIds = new Set<string>();
 
     socket.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf-8");
@@ -153,18 +169,39 @@ export function startAskSocketServer(agentName: string, events: EventBus): { soc
             questions: unknown[];
             toolCallId?: string;
           };
-          if (msg.type === "ask_request") {
-            // Register write-back so ASK_RESPONSE handler can find this socket
-            pending.set(msg.requestId, (response) => {
-              try {
-                socket.write(JSON.stringify(response) + "\n");
-              } catch {
-                // socket already closed
-              }
+          if (
+            msg.type === "ask_request" &&
+            typeof msg.requestId === "string" &&
+            msg.requestId.length > 0 &&
+            Array.isArray(msg.questions) &&
+            msg.questions.length > 0 &&
+            msg.questions.every((question) => {
+              if (!question || typeof question !== "object" || Array.isArray(question)) return false;
+              const item = question as Record<string, unknown>;
+              return typeof item.id === "string" && item.id.length > 0 &&
+                typeof item.question === "string" && item.question.length > 0 &&
+                Array.isArray(item.options) && item.options.length > 0 &&
+                item.options.every((option) => {
+                  if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+                  const label = (option as Record<string, unknown>).label;
+                  return typeof label === "string" && label.length > 0;
+                });
+            })
+          ) {
+            // A duplicate request ID replaces and releases the prior pending wait.
+            finishPending(msg.requestId);
+            idleWait?.pauseIdle();
+            pending.set(msg.requestId, {
+              socket,
+              send: (response) => {
+                try {
+                  socket.write(JSON.stringify(response) + "\n");
+                } catch {
+                  // socket already closed
+                }
+              },
             });
-            socketRequestIds.add(msg.requestId);
-            // Forward onto the handle — the ask package (or the bridge, in bridge mode)
-            // answers it; toolCallId rides along for Client correlation
+            // Forward to bus — ask package will show the TUI dialog
             emitOn(events, Events.ASK_REQUEST, {
               source: `subagent:${agentName}`,
               requestId: msg.requestId,
@@ -178,19 +215,14 @@ export function startAskSocketServer(agentName: string, events: EventBus): { soc
       }
     });
 
-    // Child exit (or the child's own 5-min timeout → socket.end()) closes the
-    // socket: signal the bridge via ASK_CANCEL for any still-pending ask so it
-    // can cancel the relayed Client request. We only signal — the bridge is
-    // the sole ASK_RESPONSE emitter (no double-decrement of its refcount).
     socket.on("close", () => {
-      for (const rid of socketRequestIds) {
-        if (pending.has(rid)) {
-          emitOn(events, Events.ASK_CANCEL, { requestId: rid, source: `subagent:${agentName}` });
-          pending.delete(rid);
+      for (const [requestId, request] of pending) {
+        if (request.socket === socket) {
+          emitOn(events, Events.ASK_CANCEL, { requestId, source: `subagent:${agentName}` });
+          finishPending(requestId);
         }
       }
     });
-
     socket.on("error", () => { /* connection dropped */ });
   });
 
@@ -198,6 +230,7 @@ export function startAskSocketServer(agentName: string, events: EventBus): { soc
 
   const cleanup = () => {
     unsubResponse();
+    for (const requestId of [...pending.keys()]) finishPending(requestId);
     server.close();
     // Named pipes on Windows are cleaned up automatically; only unlink on Unix
     if (process.platform !== "win32") {
@@ -217,103 +250,21 @@ export function startAskSocketServer(agentName: string, events: EventBus): { soc
 export function spawnSubagent(options: SpawnOptions): ChildProcess {
   const piBinary = resolvePiBinary();
   const agentName = options.agent?.name ?? "general";
+  const { socketPath, cleanup: cleanupSocket } = startAskSocketServer(agentName, options.events, options.idleWait);
+  const invocation = buildSpawnInvocation(piBinary, buildSubagentArgs(options));
 
-  // Start ask bridge socket before spawning so the env var is ready
-  const { socketPath, cleanup: cleanupSocket } = startAskSocketServer(agentName, options.events);
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: options.cwd || process.cwd(),
+    env: buildSpawnEnvironment(socketPath, options.execution?.limits),
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
 
-  // Build CLI args
-  const args: string[] = ["--mode", "json", "--no-session", "-p"];
-
-  // Model: agent.model > options.model > options.activeModel
-  const model = resolveModel(options);
-  if (model) {
-    args.push("--model", model);
-  }
-
-  // Thinking level from agent config. An unknown level is NOT passed on: pi
-  // warns and drops the flag itself, which leaves the child on the default
-  // level with the explanation in a stderr nobody reads for a successful run.
-  // `index.ts` reports the same drop where the user can see it.
-  const thinking = resolveThinkingLevel(options.agent?.thinking);
-  if (thinking.level !== undefined) {
-    args.push("--thinking", thinking.level);
-  }
-
-  // Tool allowlist from agent config.
-  //
-  // pi 1.0.4 changed what a non-empty `--tools` does to MCP tools. It no longer
-  // filters them: unless the list is empty or names an `mcp__` entry, they stay
-  // REGISTERED — reachable through codemode and `tool_search` — even though they
-  // are not *declared* to the model (`agent-session.js`: `_allowlistFiltersMcp`
-  // false → `_isAllowedTool` keeps them, `_isActivatable` withholds the
-  // declaration unless `tool_search` can load them). So the child's tool box is
-  // wider than the three names in the config, which is the hole ADR 0028 closed:
-  // `--no-mcp` stops the servers connecting at all, so there is nothing to reach.
-  // A config that wants the servers asks with `mcp: true` — verified against a
-  // live 1.2.0 child: with `--tools read` it sees exactly `read` either way, so
-  // the opt-in's observable effect today is registration, not a declared list
-  // (see ADR 0028's verification note for the open follow-up).
-  const tools = options.agent?.tools ?? [];
-  if (tools.length > 0) {
-    args.push("--tools", tools.join(","));
-    if (options.agent?.mcp !== true) {
-      args.push("--no-mcp");
-    }
-  }
-
-  // Always exclude the subagent tool itself to prevent infinite recursion
-  args.push("--exclude-tools", "subagent");
-
-  // Agent system prompt
-  const systemPrompt = options.agent?.systemPrompt?.trim();
-  if (systemPrompt) {
-    args.push("--system-prompt", systemPrompt);
-  }
-
-  // The task is the final positional argument
-  args.push(options.task);
-
-  // On Windows, spawn `node <resolved-js-path>` instead of the raw binary.
-  // The resolved path is a .js file which cannot be spawned directly on Windows.
-  // Using process.execPath avoids shell: true (no escaping risks, kill() works).
-  const isWindowsResolved = process.platform === "win32" && piBinary !== "pi";
-
-  const child = spawn(
-    isWindowsResolved ? process.execPath : piBinary,
-    [
-      ...(isWindowsResolved ? [piBinary] : []),
-      ...args,
-    ],
-    {
-      cwd: options.cwd || process.cwd(),
-      env: {
-        ...process.env,
-        PI_SUBAGENT_SOCKET: socketPath,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    },
-  );
-
-  // Clean up socket server when child exits
   child.on("exit", cleanupSocket);
   child.on("error", cleanupSocket);
 
-  // Handle abort signal
   if (options.signal) {
-    const abortHandler = () => {
-      if (child.pid && !child.killed) {
-        child.kill("SIGTERM");
-        const forceKill = setTimeout(() => {
-          if (!child.killed) child.kill("SIGKILL");
-        }, 3000);
-        forceKill.unref();
-      }
-    };
-    // A signal that is ALREADY aborted never dispatches its "abort" event (it
-    // fires exactly once, at abort time), so addEventListener alone would never
-    // kill the child — call the handler directly in that case. (kill is
-    // idempotent via the child.killed guard, so both branches coexist safely.)
+    const abortHandler = () => terminateChild(child);
     if (options.signal.aborted) abortHandler();
     else options.signal.addEventListener("abort", abortHandler, { once: true });
     child.on("exit", () => options.signal!.removeEventListener("abort", abortHandler));
@@ -321,3 +272,77 @@ export function spawnSubagent(options: SpawnOptions): ChildProcess {
 
   return child;
 }
+
+export function buildSubagentArgs(
+  options: SpawnOptions,
+  childGuardPath = fileURLToPath(new URL("./child-guard.ts", import.meta.url)),
+): string[] {
+  const args: string[] = ["--mode", "json", "--no-session", "-p"];
+  const model = resolveEffectiveModel(options);
+  if (model) args.push("--model", model);
+  const thinking = resolveThinkingLevel(options.execution?.profile.thinking ?? options.agent?.thinking).level;
+  if (thinking) args.push("--thinking", thinking);
+
+  const mode = options.execution?.profile.mode ?? "agentic";
+  if (mode === "one-shot") {
+    args.push("--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--no-mcp");
+  } else if (options.agent?.tools && options.agent.tools.length > 0) {
+    args.push("--tools", options.agent.tools.join(","));
+    if (options.agent.mcp !== true) args.push("--no-mcp");
+  }
+
+  const systemPrompt = options.agent?.systemPrompt?.trim() ||
+    (mode === "one-shot" ? ONE_SHOT_SYSTEM_PROMPT : undefined);
+  if (systemPrompt) args.push("--system-prompt", systemPrompt);
+
+  args.push("--exclude-tools", "subagent");
+  if (options.execution?.limits) args.push("--extension", childGuardPath);
+  args.push(options.task);
+  return args;
+}
+
+export function buildSpawnEnvironment(
+  socketPath: string,
+  limits: SubagentLimits | undefined,
+  baseEnvironment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnvironment, PI_SUBAGENT_SOCKET: socketPath };
+  delete env[SUBAGENT_LIMITS_ENV];
+  if (limits) env[SUBAGENT_LIMITS_ENV] = encodeLimitsEnvironment(limits);
+  return env;
+}
+
+export function buildSpawnInvocation(
+  piBinary: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  const useNode = platform === "win32" && piBinary !== "pi";
+  return {
+    command: useNode ? process.execPath : piBinary,
+    args: useNode ? [piBinary, ...args] : args,
+  };
+}
+
+
+export function terminateChild(child: ChildProcess, graceMs = 3000): void {
+  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  const forceKill = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, graceMs);
+  forceKill.unref();
+  child.once("exit", () => clearTimeout(forceKill));
+}
+
+// ponytail: short drain grace preserves final JSON; use explicit child IPC ack if 250ms proves insufficient.
+export function scheduleTerminateChild(child: ChildProcess, drainMs = 250): void {
+  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) return;
+  const timer = setTimeout(() => terminateChild(child), drainMs);
+  timer.unref();
+  child.once("exit", () => clearTimeout(timer));
+}
+
+
+/** Compatibility name for the same native model-resolution rule. */
+export const resolveEffectiveModel = resolveModel;

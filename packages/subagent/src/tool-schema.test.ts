@@ -108,7 +108,7 @@ function declaredTaskItemParams(): string[] {
 }
 
 describe("SUBAGENT_PARAMS_SCHEMA — declared parameter set (issue #114)", () => {
-  it("pins the five declared parameters", () => {
+  it("pins native and managed declared parameters", () => {
     // Exact and sorted, so it fails in BOTH directions: adding a name the pin
     // does not know (`async` would) and deleting one of the five. Read from the
     // schema object, never restated by hand. And because `SubagentParams` is
@@ -117,18 +117,18 @@ describe("SUBAGENT_PARAMS_SCHEMA — declared parameter set (issue #114)", () =>
     // check is whether anything reads the name — that cross-surface claim
     // belonged to the scanner described in the header and no longer exists, so
     // the name says only what the body proves.
-    expect([...declaredParams()].sort()).toEqual(["agent", "cwd", "model", "task", "tasks"]);
+    expect([...declaredParams()].sort()).toEqual(["agent", "cwd", "limits", "mode", "model", "outputContract", "task", "tasks", "thinking"]);
   });
 });
 
 describe("TaskItem — declared parallel task item (issue #114, second instance: `count`)", () => {
-  it("pins the four declared task-item properties", () => {
+  it("pins native and managed task-item properties", () => {
     // `count` was the proof this surface needs its own pin: a phantom can be
     // added to the task item while the top-level set above stays green. Like the
     // pin above this one enumerates the SCHEMA only — with the scanner gone
     // nothing here compares the four against what the parallel branch reads, so
     // the name claims the enumeration and no more.
-    expect([...declaredTaskItemParams()].sort()).toEqual(["agent", "cwd", "model", "task"]);
+    expect([...declaredTaskItemParams()].sort()).toEqual(["agent", "cwd", "limits", "mode", "model", "outputContract", "task", "thinking"]);
   });
 });
 

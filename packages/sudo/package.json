@@ -9,7 +9,7 @@
   "keywords": [
     "pi-package"
   ],
-  "description": "Safe privileged execution for pi — sudo_exec tool with masked password prompt and bash-sudo guard",
+  "description": "Safe privileged execution for pi \u2014 sudo_exec tool with masked password prompt and bash-sudo guard",
   "files": [
     "src"
   ],
@@ -27,8 +27,8 @@
     "typebox": ">=1.1.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.2.0",
-    "@earendil-works/pi-tui": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "@earendil-works/pi-tui": "1.3.0",
     "typebox": "^1.1.38",
     "typescript": "^6.0.0"
   },

@@ -250,6 +250,13 @@ describe("item set", () => {
       "notifyOnQuestion",
       "delayMs",
       "sessionNameModel",
+      "subagentMaxParallel",
+      "subagentMaxProviderRequests",
+      "subagentMaxToolCalls",
+      "subagentMaxTotalTokens",
+      "subagentMaxCostUsd",
+      "subagentMaxDurationMs",
+      "subagentMaxIdleMs",
     ]);
   });
 });
@@ -1081,5 +1088,18 @@ describe("the list is drawn by pi-tui's SettingsList", () => {
       expect([...new Set(found.filter((e) => !allowed.has(e)))]).toEqual([]);
       expect(found.length).toBeGreaterThan(20);
     }
+  });
+});
+
+
+describe("managed decimal ceiling prompt", () => {
+  it("accepts one decimal point for USD without truncating it to an integer", () => {
+    const h = createHarness([{ id: "cost", label: "Cost", currentValue: "0" }], {
+      cost: { kind: "number", label: "Cost", min: 0, allowDecimal: true },
+    });
+    h.press(KEY.enter);
+    h.type(".2.5");
+    h.press(KEY.enter);
+    expect(h.changes).toEqual([["cost", "0.25"]]);
   });
 });

@@ -416,6 +416,12 @@ async function finishChild(
   for (const event of events) {
     child.stdout.write(`${JSON.stringify(event)}\n`);
   }
+  // Real ChildProcess close follows pipe EOF. Flush a final unterminated stderr
+  // line too, so the line-based managed stop reader sees the actual lifecycle.
+  await new Promise<void>((resolve) => {
+    child.stderr.once("end", resolve);
+    child.stderr.end();
+  });
   child.emit("close", close[0], close[1] ?? null);
   return result;
 }

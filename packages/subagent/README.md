@@ -50,7 +50,15 @@ The `agent` field is optional — omitting it is not a built-in default agent, a
 
 Per dispatch, the model resolves in order: **the agent config's `model`, then the per-call `model`, then the parent's active model** (the first entry doesn't apply to config-less dispatch).
 
-The thinking level is **not** inherited from the parent session's active thinking. It comes from the agent file's explicit `thinking` when present; otherwise Pi works out its own (the selected model, its configuration, or the model's default).
+The thinking level is **not** inherited from the parent session's active thinking. It resolves from the agent file, then per-task `thinking`, then top-level `thinking`; otherwise Pi selects its default.
+
+## Managed execution and reports
+
+This vendor line accepts single/per-task `mode`, `thinking`, `limits`, and `outputContract`. Limits include provider requests, tool calls, total tokens, best-effort provider output tokens, USD, absolute duration and sliding idle duration. Operator defaults and maximum parallelism live in `archimedes.subagent`; `/archimedes` exposes the controls, including decimal USD. Operator zero means unlimited, whereas supplied caller limits must be positive. A cost limit is observed after responses and can overshoot by one response.
+
+`mode: "one-shot"` permits one provider request without tools, MCP, ambient extensions/skills/context files or session persistence. Explicit prompt-template macros remain available. Managed calls use local execution rather than the bridge shortcut, preserve partial output/usage on failure, and report the first termination reason. Human ask waits pause only the idle lease. Native provider truncation and cancellation are failed managed outcomes, not successful completions.
+
+Dispatch remains script-callable. Native `structuredContent` reports request-ordered runs without live scrollback or internal usage-accounting flags. Reports include native usage/cost splits, child trace, execution/limits, output-contract label and termination evidence when available. Single failures retain native text-error semantics; parallel reports include per-run errors. pi-setup's wrapper adds its own managed JSON transport, artifact persistence and termination-source evidence; these policies do not live in this package. Output contracts never imply a quality verdict.
 
 ## Agent files
 

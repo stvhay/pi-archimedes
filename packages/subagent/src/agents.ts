@@ -274,6 +274,11 @@ export function findAgent(agents: AgentConfig[], name: string): AgentConfig | un
   return agents.find((a) => a.name === name);
 }
 
+/** Resolve one named agent's model through discovery and local overrides. */
+export function resolveAgentModel(name: string, cwd: string): string | undefined {
+  return findAgent(discoverAgents(cwd), name)?.model;
+}
+
 /**
  * Format discovered agents as a compact, readable listing for the `list_agents`
  * tool. Standard detail: name, source, description, and model/tools overrides

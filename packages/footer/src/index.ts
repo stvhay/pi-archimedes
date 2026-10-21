@@ -32,6 +32,8 @@ import { formatContextBar, formatGitStatusIndicators, formatThinkingIndicator, f
 import { footerIcons } from "./utils/icons.js";
 import { packFooterLines, SEP_W, SEPARATOR } from "./utils/layout.js";
 
+const INLINE_STATUS_KEYS = new Set(["caveman", "ponytail"]);
+
 export function registerFooter(pi: ExtensionAPI): void {
   // Subscription for the footer's lifetime; module-level so a footer rebuilt
   // without an explicit dispose cannot leave a second listener behind.
@@ -105,10 +107,27 @@ export function registerFooter(pi: ExtensionAPI): void {
 
             const branchIcon = inWorktree ? footerIcons.worktree : footerIcons.branch;
 
-            // Extension status texts (pi setStatus) — may contain ANSI; oversized statuses wrap
-            const extensionStatusChunks = [...footerData.getExtensionStatuses().values()]
+            // Keyed statuses retain the managed footer contract; native wrapping
+            // still keeps oversized lines readable without losing their contents.
+            const separator = theme.fg("dim", SEPARATOR);
+            const sanitizeStatus = (text: string, collapseSpaces = true) => {
+              const oneLine = text.replace(/[\r\n\t]/g, " ");
+              return (collapseSpaces ? oneLine.replace(/ +/g, " ") : oneLine).trim();
+            };
+            const extensionStatuses = [...footerData.getExtensionStatuses().entries()]
+              .sort(([a], [b]) => a.localeCompare(b));
+            const compactStatusStr = extensionStatuses
+              .filter(([key]) => INLINE_STATUS_KEYS.has(key))
+              .map(([, text]) => sanitizeStatus(text))
               .filter(Boolean)
-              .flatMap((s) => wrapStatusToChunks(s, width));
+              .join(separator);
+            const extensionLines = extensionStatuses
+              .filter(([key]) => !INLINE_STATUS_KEYS.has(key))
+              .flatMap(([key, text]) => key === "beads-work"
+                ? text.split(/\r?\n/).map((line) => sanitizeStatus(line, false))
+                : [sanitizeStatus(text)])
+              .filter(Boolean)
+              .flatMap((text) => wrapStatusToChunks(text, width));
 
             // System info sections: dir | branch [+status] | model | thinking | ext-statuses
             const leftSections = [
@@ -116,7 +135,6 @@ export function registerFooter(pi: ExtensionAPI): void {
               currentBranch ? colorize("success", branchIcon + " " + truncateBranch(currentBranch, branchMaxLength) + (gitStatusStr ? " " + gitStatusStr : "")) : "",
               colorize("syntaxType", footerIcons.model + " " + activeModel),
               thinkingIndicatorStr,
-              ...extensionStatusChunks,
             ].filter(Boolean);
 
             // Usage stats: ↑in ↓out RcacheRead WcacheWrite $cost contextWindow
@@ -148,7 +166,14 @@ export function registerFooter(pi: ExtensionAPI): void {
             // two-line split (system info above, stats below) even when one
             // line would fit. The context bar expands into the remainder of
             // the last line and is dropped only if no reasonable space is left.
-            const separator = theme.fg("dim", SEPARATOR);
+            const leftWidth = visibleWidth(leftSections.join(separator));
+            const compactFits = width < splitThreshold
+              ? leftWidth + visibleWidth(compactStatusStr) + SEP_W <= width
+              : leftWidth + visibleWidth(compactStatusStr) + visibleWidth(statsSectionStr) + 2 * SEP_W + 13 <= width;
+            if (compactStatusStr && compactFits) leftSections.push(compactStatusStr);
+            const statusLines = compactStatusStr && !compactFits
+              ? [...wrapStatusToChunks(compactStatusStr, width), ...extensionLines]
+              : extensionLines;
             let groups = packFooterLines([...leftSections, statsSectionStr], width, SEP_W);
             if (groups.length < 2 && width < splitThreshold && leftSections.length > 0) {
               groups = [leftSections, [statsSectionStr]];
@@ -166,7 +191,8 @@ export function registerFooter(pi: ExtensionAPI): void {
                 }
                 return truncateToWidth(line, width);
               })
-              .filter((line) => line.length > 0);
+              .filter((line) => line.length > 0)
+              .concat(statusLines);
           } catch (e) {
             // The user has to learn the status bar went blank, but never from a
             // console write: detail to the log on every frame, one line to the

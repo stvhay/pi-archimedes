@@ -41,6 +41,7 @@ import * as fc from "fast-check";
 import { Box, Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { handleToolStart } from "./handlers.js";
 import type { StreamState } from "./types.js";
+import { readUsage } from "./usage.js";
 
 const discoverAgents = vi.hoisted(() => vi.fn());
 const executeSubagent = vi.hoisted(() => vi.fn());
@@ -500,11 +501,13 @@ describe("subagent tool rows: width audit", () => {
     const state: StreamState = {
       toolCount: 0,
       turnCount: 0,
-      totalInput: 0,
-      totalOutput: 0,
-      totalCacheRead: 0,
-      totalCacheWrite: 0,
-      totalCost: 0,
+      usage: readUsage(undefined),
+      turnUsage: readUsage(undefined),
+      partialUsage: readUsage(undefined),
+      provider: undefined,
+      streamingOutput: undefined,
+      streamingParts: new Map(),
+      outputLimit: undefined,
       currentTool: undefined,
       currentToolArgs: undefined,
       currentToolStartedAt: undefined,
@@ -514,7 +517,7 @@ describe("subagent tool rows: width audit", () => {
       toolCalls: [],
       finalOutput: undefined,
     };
-    handleToolStart(state, { type: "tool_execution_start", toolName: "bash", args: { command: longCommand } });
+    handleToolStart(state, { type: "tool_execution_start", toolCallId: "wide-bash", toolName: "bash", args: { command: longCommand } });
     expect(state.currentToolArgs?.length, "handler threw away args the frame could draw")
       .toBeGreaterThanOrEqual(longCommand.length);
 

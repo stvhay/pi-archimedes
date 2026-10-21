@@ -1,9 +1,12 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { SUBAGENT_PARAMS_SCHEMA, SUBAGENT_OUTPUT_SCHEMA, subagentStructuredContent, type SubagentParams } from "./tool-schema.js";
 import { executeSubagent, executeParallel } from "./execute.js";
-import { formatParallelResults, formatSingleResult } from "./format.js";
+import { loadSubagentConfig } from "./config.js";
+import { resolveConfiguredLimits, validateDispatchPolicy } from "./dispatch-policy.js";
+import { resolveChildExecution } from "./execution-profile.js";
+import { formatSingleResult } from "./format.js";
 // agent-manager.js lazy-loaded below to keep subagent tool registration fast
 import { renderSubagentResult } from "./render.js";
 import { RowBlock } from "./row-block.js";
@@ -36,6 +39,7 @@ interface RenderTheme {
 // ── Tool registration ───────────────────────────────────────────────────────
 
 export function registerSubagent(pi: ExtensionAPI): void {
+  if (process.env.PI_SUBAGENT_SOCKET) return;
   // Floor check before anything that can fail (ADR 0026). This package spawns
   // pi with flags and reads event fields that only behave correctly on 1.x
   // (`--tools` semantics, `agent_settled.aborted`, print-mode exit codes), and a
@@ -48,26 +52,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
     name: "subagent",
     label: "Subagent",
     description:
-      "Delegate tasks to subagents. Provide either 'task' (single) or 'tasks' (parallel). Agent is optional — omit for a config-less run with the parent's model and all tools. Model override is rarely needed; the agent config or parent model is used by default.",
+      "Delegate tasks to subagents. Provide either 'task' (single) or 'tasks' (parallel). Agent is optional — omit for a config-less run with the parent's model and all tools. Use mode 'one-shot' for one isolated response from a complete packet. Model override is rarely needed; the agent config or parent model is used by default.",
     parameters: SUBAGENT_PARAMS_SCHEMA,
     outputSchema: SUBAGENT_OUTPUT_SCHEMA,
-    /**
-     * Declared to the model, never callable from a codemode script — pi's own
-     * wording for this exposure is "orchestrating" tools
-     * (`dist/core/extensions/types.d.ts`, `ToolExposure`), and dispatching a
-     * child session is that.
-     *
-     * Measured cost, so it is not discovered later: before this line a codemode
-     * script could dispatch a child and read its report — `tools.subagent({ task:
-     * "Reply with exactly the single word: child" })` resolved to
-     * `{ mode: "single", results: [ { outcome: "completed", finalOutput: "child",
-     * usage: {…} } ] }` on a real headless pi. After it the same call reports
-     * `tools.subagent does not exist`, and `subagent` is gone from the script's
-     * `ALL_TOOLS`. A script that wants a child's work now has to ask the model to
-     * dispatch one; `list_agents` stays `direct`, so scripts can still read the
-     * catalogue. The model's own dispatches are unaffected.
-     */
-    exposure: "model-only",
+    // Preserve existing script callers; child recursion is blocked separately.
+    exposure: "direct",
 
     async execute(
       _id: string,
@@ -77,9 +66,37 @@ export function registerSubagent(pi: ExtensionAPI): void {
       ctx: ExtensionContext,
     ): Promise<SubagentToolResult> {
       const agents = discoverAgents(ctx.cwd);
+      let config;
+      let configuredLimits;
+      try {
+        config = loadSubagentConfig();
+        configuredLimits = resolveConfiguredLimits(config);
+      } catch (error) {
+        return policyError(params.tasks?.length ? "parallel" : "single", error);
+      }
 
       // Parallel mode
       if (params.tasks && params.tasks.length > 0) {
+        let taskPlans;
+        try {
+          taskPlans = params.tasks.map((task) => {
+            const agentConfig = task.agent ? findAgent(agents, task.agent) : undefined;
+            return {
+              task, agentConfig,
+              execution: resolveChildExecution({
+                operatorLimits: configuredLimits, topLevel: params, task,
+                agentThinking: agentConfig?.thinking,
+              }),
+            };
+          });
+          validateDispatchPolicy(config, taskPlans.map(({ task, execution }) => ({
+            limits: execution.limits,
+            providerMaxRetries: SettingsManager.create(task.cwd ?? process.cwd())
+              .getProviderRetrySettings().maxRetries ?? 0,
+          })));
+        } catch (error) {
+          return policyError("parallel", error);
+        }
         // Combined pre-spawn checks for parallel mode: unknown agents + invalid
         // models. If ANY task is invalid, abort the whole batch with a single
         // tool result listing all errors (no tasks spawn).
@@ -134,9 +151,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
           warnUnknownThinkingLevel(ctx, warnedThinking, t.agent ? findAgent(agents, t.agent)?.thinking : undefined);
         }
         const results: SubagentResult[] = await executeParallel({
-          tasks: params.tasks.map((t) => ({
+          tasks: taskPlans.map(({ task: t, agentConfig, execution }) => ({
             agent: t.agent ?? undefined,
-            agentConfig: t.agent ? findAgent(agents, t.agent) : undefined,
+            agentConfig,
+            execution,
+            ...((t.outputContract ?? params.outputContract) ? { outputContract: t.outputContract ?? params.outputContract! } : {}),
             task: t.task,
             model: t.model,
             activeModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
@@ -161,7 +180,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
         const nativeUsage = sumNativeUsage(results);
         return {
-          content: [{ type: "text", text: formatParallelResults(results) }],
+          content: [
+            { type: "text", text: formatResultsSummary(results) },
+            ...formatParallelOutputs(results),
+          ],
           ...(nativeUsage ? { usage: nativeUsage } : {}),
           structuredContent: subagentStructuredContent("parallel", results),
           details: {
@@ -219,7 +241,21 @@ export function registerSubagent(pi: ExtensionAPI): void {
         }
         warnUnavailableTools(pi, ctx, new Set(), params.agent ?? "subagent", agentConfig?.tools);
         warnUnknownThinkingLevel(ctx, new Set(), agentConfig?.thinking);
+        let execution;
+        try {
+          execution = resolveChildExecution({
+            operatorLimits: configuredLimits, topLevel: params,
+            agentThinking: agentConfig?.thinking,
+          });
+          const retries = SettingsManager.create(params.cwd ?? process.cwd())
+            .getProviderRetrySettings().maxRetries ?? 0;
+          validateDispatchPolicy(config, [{ limits: execution.limits, providerMaxRetries: retries }]);
+        } catch (error) {
+          return policyError("single", error);
+        }
         const result: SubagentResult = await executeSubagent({
+          execution,
+          ...(params.outputContract ? { outputContract: params.outputContract } : {}),
           agent: params.agent ?? undefined,
           agentConfig,
           task: params.task,
@@ -474,4 +510,58 @@ export function registerAgentsCommand(pi: ExtensionAPI): void {
 
 export default function (pi: ExtensionAPI): void {
   registerSubagent(pi);
+}
+
+function policyError(mode: "single" | "parallel", error: unknown): SubagentToolResult {
+  return {
+    content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+    details: { mode, results: [], progress: undefined },
+    isError: true,
+  };
+}
+
+const PARALLEL_OUTPUT_MAX_CHARS = 12_000;
+
+function resultOutput(result: SubagentResult): string {
+  return result.finalOutput ?? result.error ?? "completed";
+}
+
+function formatResultsSummary(results: SubagentResult[]): string {
+  const lines = results.map((r) => {
+    const status = r.error || r.exitCode !== 0 ? "✗" : "✓";
+    const summary = r.progressSummary
+      ? `${r.progressSummary.toolCount} tools · ${Math.round(r.progressSummary.tokens / 1000)}k tok · ${Math.round(r.progressSummary.durationMs / 1000)}s`
+      : "";
+    return `${status} ${r.agent}${summary ? " " + summary : ""}`;
+  });
+  return lines.join("\n");
+}
+
+function formatParallelOutputs(results: SubagentResult[]): Array<{ type: "text"; text: string }> {
+  const messageMaxChars = Math.floor(PARALLEL_OUTPUT_MAX_CHARS / Math.max(1, results.length));
+  const suffix = "\n[delegated output truncated]";
+  if (results.length > 0 && messageMaxChars <= `Child ${results.length} output:\n`.length) {
+    const header = "Child 1 output:\n";
+    const omitted = results.length - 1;
+    let notice = `\n[${omitted} later child outputs omitted; complete results remain in details.results]`;
+    const output = resultOutput(results[0]!);
+    let outputChars = PARALLEL_OUTPUT_MAX_CHARS - header.length - notice.length;
+    if (output.length > outputChars) {
+      notice = `\n[delegated output truncated; ${omitted} later child outputs omitted; complete results remain in details.results]`;
+      outputChars = PARALLEL_OUTPUT_MAX_CHARS - header.length - notice.length;
+    }
+    return [{ type: "text", text: `${header}${output.slice(0, Math.max(0, outputChars))}${notice}` }];
+  }
+  return results.flatMap((result, index) => {
+    const header = `Child ${index + 1} output:\n`;
+    const available = messageMaxChars - header.length;
+    if (available <= 0) return [];
+    const output = resultOutput(result);
+    if (output.length <= available) return [{ type: "text" as const, text: `${header}${output}` }];
+    const outputChars = Math.max(0, available - suffix.length);
+    return [{
+      type: "text" as const,
+      text: `${header}${output.slice(0, outputChars)}${outputChars ? suffix : ""}`,
+    }];
+  });
 }

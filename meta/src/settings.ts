@@ -5,12 +5,14 @@ import { getUISettingsItems, saveUIConfig, normalizeThinkingStyle, normalizeTool
 import { getFooterSettingsItems } from "@pi-archimedes/footer/config";
 import { getNotifySettingsItems } from "@pi-archimedes/notify";
 import { getSessionNameSettingsItems } from "@pi-archimedes/session-name";
+import { getSubagentSettingsItems } from "@pi-archimedes/subagent/config";
 import {
   loadAllConfig,
   saveFooterConfig,
   saveDiffConfig,
   saveNotifyConfig,
   saveSessionNameConfig,
+  saveSubagentConfig,
   type NotifyConfig,
 } from "./config.js";
 import { isPluginEnabled } from "./plugins.js";
@@ -22,6 +24,14 @@ import { createSettingsManager, type PromptDescriptor } from "./settings-manager
 // Exported for the panel-wiring test: every item must be reachable through PROMPTS or values.
 export const PROMPTS: Record<string, PromptDescriptor> = {
   labelText: { kind: "text", label: "Label text" },
+  subagentMaxParallel: { kind: "number", label: "Subagent Max Parallel (0 = unlimited)", min: 0 },
+  subagentMaxProviderRequests: { kind: "number", label: "Subagent Max Provider Requests (0 = unlimited)", min: 0 },
+  subagentMaxToolCalls: { kind: "number", label: "Subagent Max Tool Calls (0 = unlimited)", min: 0 },
+  subagentMaxTotalTokens: { kind: "number", label: "Subagent Max Total Tokens (0 = unlimited)", min: 0 },
+  subagentMaxCostUsd: { kind: "number", label: "Subagent Max Cost USD (0 = unlimited)", min: 0, allowDecimal: true },
+  subagentMaxDurationMs: { kind: "number", label: "Subagent Max Duration (0 = unlimited)", min: 0 },
+  subagentMaxIdleMs: { kind: "number", label: "Subagent Max Idle (0 = unlimited)", min: 0 },
+
   editorSpinLabel: { kind: "text", label: "Spinner label" },
   labelColor: { kind: "text", label: "RGB color (e.g. 255,215,0)" },
   diffTheme: { kind: "text", label: "Shiki theme" },
@@ -76,6 +86,10 @@ export async function buildSettingsItems(allConfig: ReturnType<typeof loadAllCon
     items.push(...getSessionNameSettingsItems({ ...allConfig.sessionName }));
   }
 
+  if (isPluginEnabled("subagent")) {
+    items.push(...getSubagentSettingsItems(allConfig.subagent));
+  }
+
   return items;
 }
 
@@ -87,6 +101,10 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
   const footerConfig = { ...allConfig.footer };
   const diffConfig = { ...allConfig.diff };
   const sessionNameConfig = { ...allConfig.sessionName };
+  const subagentConfig = {
+    ...allConfig.subagent,
+    defaultLimits: { ...allConfig.subagent.defaultLimits },
+  };
 
   const items = await buildSettingsItems(allConfig);
 
@@ -161,6 +179,15 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
             break;
           }
 
+          // Managed subagent ceilings; validated again by saveSubagentConfig.
+          case "subagentMaxParallel": subagentConfig.maxParallel = Number(newValue); break;
+          case "subagentMaxProviderRequests": subagentConfig.defaultLimits.maxProviderRequests = Number(newValue); break;
+          case "subagentMaxToolCalls": subagentConfig.defaultLimits.maxToolCalls = Number(newValue); break;
+          case "subagentMaxTotalTokens": subagentConfig.defaultLimits.maxTotalTokens = Number(newValue); break;
+          case "subagentMaxCostUsd": subagentConfig.defaultLimits.maxCostUsd = Number(newValue); break;
+          case "subagentMaxDurationMs": subagentConfig.defaultLimits.maxDurationMs = Number(newValue); break;
+          case "subagentMaxIdleMs": subagentConfig.defaultLimits.maxIdleMs = Number(newValue); break;
+
           // ── Session name settings ──
           // Blank and the displayed placeholder both mean "use the current
           // model", and are stored as unset rather than "" so the key disappears.
@@ -172,6 +199,7 @@ export async function openSettings(pi: ExtensionAPI, ctx: ExtensionContext): Pro
         }
       },
       onSave: () => {
+        saveSubagentConfig(subagentConfig);
         saveUIConfig(uiConfig);
         saveFooterConfig(footerConfig);
         saveDiffConfig(diffConfig);

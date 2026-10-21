@@ -160,6 +160,7 @@ export function renderCompactSingle(
       statsData: {
         turns: result.usage.turns ?? 0,
         toolCount: summary.toolCount,
+        turnTokens: progress?.turnTokens,
         tokens: summary.tokens,
         durationMs: liveDuration,
         cost: result.usage.cost ?? 0,
@@ -211,6 +212,7 @@ export function renderCompactParallel(
         statsData: {
           turns: result.usage.turns ?? 0,
           toolCount: summary.toolCount,
+          turnTokens: progress?.turnTokens,
           tokens: summary.tokens,
           durationMs: summary.durationMs,
           cost: result.usage.cost ?? 0,
@@ -262,8 +264,9 @@ export function renderCompactProgress(
       task: progress.task,
       model: progress.model,
       statsData: {
-        turns: 0,
+        turns: progress.turnCount ?? 0,
         toolCount: progress.toolCount,
+        turnTokens: progress.turnTokens,
         tokens: progress.tokens,
         durationMs: liveDuration,
         cost: progress.cost,
@@ -304,8 +307,9 @@ export function renderCompactParallelProgress(
         task: progress.task,
         model: progress.model,
         statsData: {
-          turns: 0,
+          turns: progress.turnCount ?? 0,
           toolCount: progress.toolCount,
+          turnTokens: progress.turnTokens,
           tokens: progress.tokens,
           durationMs: progress.durationMs,
           cost: progress.cost,

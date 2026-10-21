@@ -30,7 +30,7 @@ vi.mock("./agents.js", async (importOriginal) => ({
 vi.mock("./execute.js", () => ({ executeSubagent, executeParallel }));
 
 const { registerSubagent } = await import("./index.js");
-const { formatSingleResult, formatParallelResults } = await import("./format.js");
+const { formatSingleResult } = await import("./format.js");
 
 type RegisteredTool = {
   name: string;
@@ -216,7 +216,11 @@ describe("subagent structuredContent — parallel mode", () => {
       makeCtx(),
     );
 
-    expect(result.content[0]!.text).toBe(formatParallelResults([okResult, second] as never));
+    expect(result.content).toEqual([
+      { type: "text", text: "✓ reviewer 1 tools · 0k tok · 0s\n✓ explorer 1 tools · 0k tok · 0s" },
+      { type: "text", text: "Child 1 output:\nall good" },
+      { type: "text", text: "Child 2 output:\nnoted" },
+    ]);
     const structured = result.structuredContent as { mode: string; results: Array<{ agent: string }> };
     expect(structured.mode).toBe("parallel");
     expect(structured.results.map((r) => r.agent)).toEqual(["reviewer", "explorer"]);

@@ -1,30 +1,231 @@
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { ChildProcess } from "node:child_process";
+import type { ResolvedChildExecution, StreamState, SubagentProgress, SubagentResult } from "./types.js";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
-import type { StreamState, SubagentProgress, SubagentResult } from "./types.js";
 import { Events, emitOn } from "@pi-archimedes/core/events";
 import { normalizeTodoItems, pickTodoListRaw } from "@pi-archimedes/todo/prepare-args";
+import { decideRunOutcome } from "./run-outcome.js";
+import { decodeLimitStop } from "./limits.js";
+import { decodeOutputLimitEvidence } from "./output-limit.js";
+import { scheduleTerminateChild } from "./spawn.js";
+import { addUsage, isUsage, readUsage, toSubagentUsage } from "./usage.js";
 import {
   type JsonEvent,
   handleToolStart,
   handleToolEnd,
   handleToolResult,
+  handleMessageStart,
+  handleMessageUpdate,
   handleMessageEnd,
   handleAgentEnd,
 } from "./handlers.js";
-import { decideRunOutcome } from "./run-outcome.js";
 
 export interface StreamCallbacks {
   agent?: string;
   task?: string;
+  /** Parent host handle; never recreate the retired global bus. */
+  events?: EventBus;
+  execution?: ResolvedChildExecution;
   onProgress?: (progress: SubagentProgress) => void;
-  /**
-   * The parent's host handle (`pi.events`), injected. `streamEvents` is a plain
-   * function over a child process, so it has no `pi` of its own; the child's
-   * todo state is announced on the handle the caller is holding, which is the
-   * same one the todo package subscribed on in this process.
-   */
-  events: EventBus;
+  onActivity?: () => void;
+  onTermination?: (termination: NonNullable<SubagentResult["termination"]>) => void;
+  onSettled?: () => void;
+}
+
+const REPEATED_ERROR_LIMIT = 3;
+const MAX_FINGERPRINT_DEPTH = 64;
+const MAX_FINGERPRINT_NODES = 10_000;
+const MAX_FINGERPRINT_CHARS = 256_000;
+// ponytail: cap malformed-stream state; use a bounded LRU if legitimate children exceed 1,000 tools.
+const MAX_TRACKED_TOOL_CALL_IDS = 1_000;
+
+function canonicalJsonValue(
+  value: unknown,
+  depth = 0,
+  budget = { nodes: MAX_FINGERPRINT_NODES, chars: MAX_FINGERPRINT_CHARS },
+): unknown {
+  if (depth > MAX_FINGERPRINT_DEPTH) throw new RangeError("fingerprint input is too deep");
+  if (--budget.nodes < 0) throw new RangeError("fingerprint input is too large");
+  if (typeof value === "string") {
+    budget.chars -= value.length;
+    if (budget.chars < 0) throw new RangeError("fingerprint input is too large");
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > budget.nodes) throw new RangeError("fingerprint input is too large");
+    return value.map((item) => canonicalJsonValue(item, depth + 1, budget));
+  }
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const keys: string[] = [];
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) continue;
+    if (keys.length >= budget.nodes) throw new RangeError("fingerprint input is too large");
+    budget.chars -= key.length;
+    if (budget.chars < 0) throw new RangeError("fingerprint input is too large");
+    keys.push(key);
+  }
+  keys.sort();
+  return Object.fromEntries(
+    keys.map((key) => [key, canonicalJsonValue(record[key], depth + 1, budget)]),
+  );
+}
+
+function fingerprint(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(canonicalJsonValue(value));
+    if (typeof json !== "string" || json.length > MAX_FINGERPRINT_CHARS) return undefined;
+    return createHash("sha256").update(json).digest("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+const ACTIVITY_EVENT_TYPES = new Set([
+  "session",
+  "agent_start",
+  "agent_end",
+  "agent_settled",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "queue_update",
+  "compaction_start",
+  "compaction_end",
+  "entry_appended",
+  "session_info_changed",
+  "thinking_level_changed",
+  "auto_retry_start",
+  "auto_retry_end",
+  "summarization_retry_scheduled",
+  "summarization_retry_attempt_start",
+  "summarization_retry_finished",
+  "bash_execution_update",
+]);
+
+function isKnownEvent(value: unknown): value is JsonEvent {
+  return isRecord(value) && typeof value.type === "string" && ACTIVITY_EVENT_TYPES.has(value.type);
+}
+
+function isAssistantContentPart(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "text") return typeof value.text === "string";
+  if (value.type === "thinking") return typeof value.thinking === "string";
+  return value.type === "toolCall" &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    isRecord(value.arguments);
+}
+
+function isMessageUpdateActivity(value: Record<string, unknown>): boolean {
+  const message = value.message;
+  if (
+    isRecord(message) &&
+    message.role === "assistant" &&
+    Array.isArray(message.content) &&
+    message.content.every(isAssistantContentPart) &&
+    isUsage(message.usage)
+  ) return true;
+
+  const update = value.assistantMessageEvent;
+  if (!isRecord(update) || !Number.isSafeInteger(update.contentIndex) || (update.contentIndex as number) < 0) {
+    return false;
+  }
+  switch (update.type) {
+    case "text_start":
+    case "thinking_start":
+    case "toolcall_start":
+      return true;
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta":
+      return typeof update.delta === "string";
+    case "text_end":
+    case "thinking_end":
+      return typeof update.content === "string";
+    case "toolcall_end":
+      return isRecord(update.toolCall);
+    default:
+      return false;
+  }
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+const COMPACTION_REASONS = new Set(["manual", "threshold", "overflow"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function isActivityEvent(value: JsonEvent): boolean {
+  switch (value.type) {
+    case "agent_start":
+    case "agent_settled":
+    case "turn_start":
+    case "summarization_retry_finished":
+      return true;
+    case "queue_update":
+      return Array.isArray(value.steering) && Array.isArray(value.followUp);
+    case "compaction_start":
+      return COMPACTION_REASONS.has(value.reason as string);
+    case "compaction_end":
+      return COMPACTION_REASONS.has(value.reason as string) &&
+        typeof value.aborted === "boolean" && typeof value.willRetry === "boolean";
+    case "entry_appended":
+      return isRecord(value.entry);
+    case "session_info_changed":
+      return Object.hasOwn(value, "name") && (value.name === undefined || typeof value.name === "string");
+    case "thinking_level_changed":
+      return THINKING_LEVELS.has(value.level as string);
+    case "auto_retry_start":
+      return isNonNegativeInteger(value.attempt) && isNonNegativeInteger(value.maxAttempts) &&
+        isNonNegativeInteger(value.delayMs) && typeof value.errorMessage === "string";
+    case "auto_retry_end":
+      return typeof value.success === "boolean" && isNonNegativeInteger(value.attempt);
+    case "summarization_retry_scheduled":
+      return isNonNegativeInteger(value.attempt) && isNonNegativeInteger(value.maxAttempts) &&
+        isNonNegativeInteger(value.delayMs) && typeof value.errorMessage === "string";
+    case "summarization_retry_attempt_start":
+      return value.source === "branchSummary" ||
+        (value.source === "compaction" && COMPACTION_REASONS.has(value.reason as string));
+    case "bash_execution_update":
+      return typeof value.delta === "string";
+    case "session":
+      return typeof value.id === "string" && value.id.length > 0;
+    case "agent_end":
+      return Array.isArray(value.messages);
+    case "turn_end":
+      return isRecord(value.message) && Array.isArray(value.toolResults);
+    case "message_start":
+    case "message_end":
+      return isRecord(value.message) && typeof value.message.role === "string";
+    case "message_update":
+      return isMessageUpdateActivity(value as unknown as Record<string, unknown>);
+    case "tool_execution_start":
+      return typeof value.toolCallId === "string" && value.toolCallId.length > 0
+        && typeof value.toolName === "string" && value.toolName.length > 0
+        && Object.hasOwn(value, "args");
+    case "tool_execution_update":
+      return typeof value.toolCallId === "string" && value.toolCallId.length > 0
+        && typeof value.toolName === "string" && value.toolName.length > 0
+        && Object.hasOwn(value, "args") && Object.hasOwn(value, "partialResult");
+    case "tool_execution_end":
+      return typeof value.toolCallId === "string" && value.toolCallId.length > 0
+        && typeof value.toolName === "string" && value.toolName.length > 0
+        && Object.hasOwn(value, "result") && typeof value.isError === "boolean";
+    default:
+      return false;
+  }
 }
 
 /**
@@ -36,14 +237,21 @@ export interface StreamCallbacks {
  */
 export function streamEvents(
   child: ChildProcess,
-  callbacks: StreamCallbacks,
+  callbacks: StreamCallbacks = {},
 ): Promise<SubagentResult> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      callbacks.onSettled?.();
+    };
 
     // Startup safeguard: if no JSON event arrives within 2 minutes, kill the child.
     const STARTUP_TIMEOUT_MS = 2 * 60 * 1000;
     let startupTimer: NodeJS.Timeout | undefined = setTimeout(() => {
+      settle();
       child.kill("SIGKILL");
       reject(
         new Error(
@@ -62,49 +270,136 @@ export function streamEvents(
     const state: StreamState = {
       toolCount: 0,
       turnCount: 0,
-      totalInput: 0,
-      totalOutput: 0,
-      totalCacheRead: 0,
-      totalCacheWrite: 0,
-      totalCost: 0,
+      usage: readUsage(undefined),
+      turnUsage: readUsage(undefined),
+      partialUsage: readUsage(undefined),
       currentTool: undefined,
       currentToolArgs: undefined,
       currentToolStartedAt: undefined,
+      provider: undefined,
       model: undefined,
       accumulatedOutput: [],
+      streamingOutput: undefined,
+      streamingParts: new Map(),
+      outputLimit: undefined,
       recentOutput: [],
       toolCalls: [],
       finalOutput: undefined,
+      error: undefined,
     };
 
-    // Collect stderr for error reporting
-    const stderrChunks: Buffer[] = [];
-    child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-
+    const stderrLines: string[] = [];
     let error: string | undefined;
+    let termination = undefined as SubagentResult["termination"];
+    const toolFingerprints = new Map<
+      string,
+      { toolName: string; call?: string } | null
+    >();
+    const seenToolCallIds = new Set<string>();
+    let repeatedErrorTracking = true;
+    let lastErrorFingerprint: string | undefined;
+    let repeatedErrorCount = 0;
 
-    const buildProgress = (): SubagentProgress => ({
-      agent: callbacks.agent ?? "subagent",
-      status: "running",
-      task: callbacks.task ?? "",
-      currentTool: state.currentTool,
-      currentToolArgs: state.currentToolArgs,
-      currentToolStartedAt: state.currentToolStartedAt,
-      toolCount: state.toolCount,
-      inputTokens: state.totalInput,
-      outputTokens: state.totalOutput,
-      tokens: state.totalInput + state.totalOutput,
-      cost: state.totalCost,
-      durationMs: Date.now() - startTime,
-      error,
-      output:
-        state.accumulatedOutput.length > 0
-          ? state.accumulatedOutput.join("\n\n")
-          : undefined,
-      recentOutput: state.recentOutput.length > 0 ? state.recentOutput : undefined,
-      toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
-      model: state.model,
-    });
+    const resetRepeatedErrorStreak = (): void => {
+      lastErrorFingerprint = undefined;
+      repeatedErrorCount = 0;
+    };
+
+    const disableRepeatedErrorTracking = (): void => {
+      repeatedErrorTracking = false;
+      toolFingerprints.clear();
+      seenToolCallIds.clear();
+      resetRepeatedErrorStreak();
+    };
+
+    const observeToolResult = (
+      toolFingerprint: string,
+      result: unknown,
+      isError: boolean,
+    ): void => {
+      if (termination) return;
+      if (!isError) {
+        resetRepeatedErrorStreak();
+        return;
+      }
+
+      const failedResultFingerprint = fingerprint([toolFingerprint, result]);
+      if (!failedResultFingerprint) {
+        resetRepeatedErrorStreak();
+        return;
+      }
+      repeatedErrorCount = failedResultFingerprint === lastErrorFingerprint ? repeatedErrorCount + 1 : 1;
+      lastErrorFingerprint = failedResultFingerprint;
+      if (repeatedErrorCount < REPEATED_ERROR_LIMIT) return;
+
+      termination = {
+        reason: "repeated-error",
+        limit: REPEATED_ERROR_LIMIT,
+        observed: repeatedErrorCount,
+        usageState: "partial",
+      };
+      callbacks.onTermination?.(termination);
+      error = "Subagent stopped: repeated-error";
+      scheduleTerminateChild(child);
+    };
+
+    if (child.stderr) {
+      const stderrReader = createInterface({ input: child.stderr, crlfDelay: Infinity });
+      stderrReader.on("line", (line) => {
+        const outputLimit = decodeOutputLimitEvidence(line);
+        if (outputLimit) {
+          state.outputLimit = outputLimit;
+          return;
+        }
+        const stop = decodeLimitStop(line);
+        if (stop && !termination) {
+          termination = stop;
+          callbacks.onTermination?.(termination);
+          error = `Subagent stopped: ${stop.reason}`;
+          if (stop.reason !== "output-limit") scheduleTerminateChild(child);
+        } else if (!stop) {
+          stderrLines.push(line);
+        }
+      });
+    }
+
+    const observedUsage = () => addUsage(state.usage, state.partialUsage);
+
+    const observedOutput = (): string | undefined => {
+      const parts = [
+        ...state.accumulatedOutput,
+        ...(state.streamingOutput ? [state.streamingOutput] : []),
+      ];
+      return parts.length > 0 ? parts.join("\n\n") : undefined;
+    };
+
+    const buildProgress = (): SubagentProgress => {
+      const usage = observedUsage();
+      const turnUsage = state.partialUsage.totalTokens > 0 ? state.partialUsage : state.turnUsage;
+      return {
+        agent: callbacks.agent ?? "subagent",
+        status: "running",
+        task: callbacks.task ?? "",
+        currentTool: state.currentTool,
+        currentToolArgs: state.currentToolArgs,
+        currentToolStartedAt: state.currentToolStartedAt,
+        toolCount: state.toolCount,
+        turnCount: state.turnCount,
+        turnTokens: turnUsage.totalTokens,
+        inputTokens: usage.input,
+        outputTokens: usage.output,
+        cacheReadTokens: usage.cacheRead,
+        cacheWriteTokens: usage.cacheWrite,
+        tokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+        cost: usage.cost.total,
+        durationMs: Date.now() - startTime,
+        error,
+        output: observedOutput(),
+        recentOutput: state.recentOutput.length > 0 ? state.recentOutput : undefined,
+        toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
+        model: state.model,
+      };
+    };
 
     const emitProgress = () => callbacks.onProgress?.(buildProgress());
 
@@ -115,15 +410,12 @@ export function streamEvents(
     if (!child.stdout) {
       clearStartupTimer();
       clearInterval(heartbeat);
+      settle();
       reject(new Error("subagent child has no stdout pipe"));
       return;
     }
 
     const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
-
-    // toolCallId → raw todoList from tool_execution_start, consumed by the
-    // matching tool_execution_end. pi emits tool_execution_start with the
-    // raw (pre-prepareToolCall) arguments, so these may be unrepaired.
     const pendingTodoArgs = new Map<string, unknown[]>();
     let subagentSource = `subagent:${callbacks.agent ?? "general"}`;
 
@@ -131,40 +423,63 @@ export function streamEvents(
       const trimmed = line.trim();
       if (!trimmed) return;
 
-      let event: JsonEvent;
+      let parsed: unknown;
       try {
-        event = JSON.parse(trimmed) as JsonEvent;
+        parsed = JSON.parse(trimmed) as unknown;
       } catch {
         // Non-JSON output — ignore (can happen from pi startup messages)
         return;
       }
+      if (!isKnownEvent(parsed)) return;
+      const event = parsed;
 
-      // First real event means model has engaged — cancel startup watchdog
-      clearStartupTimer();
+      if (isActivityEvent(event)) {
+        // First runtime-valid event means model has engaged — cancel startup watchdog.
+        clearStartupTimer();
+        callbacks.onActivity?.();
+      }
 
       switch (event.type) {
         case "session": {
           if (typeof event.id === "string" && event.id) {
             state.childSessionId = event.id;
-            // A child with a session id gets a unique per-child todo source so
-            // concurrent children sharing an agent name don't clobber each
-            // other's accepted state when one clears on exit. Children without
-            // a session id (e.g. tests) keep the legacy subagent:<agent> form.
             subagentSource = `subagent:${callbacks.agent ?? "general"}:${event.id}`;
           }
           break;
         }
         case "tool_execution_start": {
+          const toolCallId = typeof event.toolCallId === "string" && event.toolCallId
+            ? event.toolCallId
+            : undefined;
+          const toolCallKey = repeatedErrorTracking && toolCallId
+            ? fingerprint(toolCallId)
+            : undefined;
+          if (toolCallKey) {
+            const duplicate = seenToolCallIds.has(toolCallKey);
+            if (!duplicate && seenToolCallIds.size >= MAX_TRACKED_TOOL_CALL_IDS) {
+              disableRepeatedErrorTracking();
+            } else {
+              seenToolCallIds.add(toolCallKey);
+              if (duplicate) {
+                toolFingerprints.set(toolCallKey, null);
+              } else if (
+                typeof event.toolName === "string" &&
+                event.toolName &&
+                event.args !== undefined
+              ) {
+                const toolName = fingerprint(event.toolName);
+                const call = fingerprint([event.toolName, event.args]);
+                if (toolName) toolFingerprints.set(toolCallKey, { toolName, ...(call ? { call } : {}) });
+              }
+            }
+          }
           handleToolStart(state, event);
           emitProgress();
+          // Start arguments are not accepted state. Publish only after success.
           if (event.toolName === "manage_todo_list" && typeof event.toolCallId === "string") {
             const args = event.args as Record<string, unknown> | undefined;
-            // Raw (pre-prepareArguments) args: the child model may have used
-            // an alias key (todo_list/todos) — pickTodoListRaw covers it.
             const todoList = pickTodoListRaw(args);
-            if (Array.isArray(todoList)) {
-              pendingTodoArgs.set(event.toolCallId, todoList);
-            }
+            if (Array.isArray(todoList)) pendingTodoArgs.set(event.toolCallId, todoList);
           }
           break;
         }
@@ -174,19 +489,34 @@ export function streamEvents(
             const stowed = id ? pendingTodoArgs.get(id) : undefined;
             if (id) pendingTodoArgs.delete(id);
             const result = event.result as Record<string, unknown> | undefined;
-            // Tool-level failure (todo's execute() RETURNS {isError:true} on validation
-            // rejection — it does not throw) arrives as event.isError=false with
-            // result.isError=true. Harness failures (abort, not-found, block, throw)
-            // arrive as event.isError=true. Check BOTH — the same convention
-            // handleToolResult in handlers.ts already uses.
             const failed = event.isError === true || result?.isError === true;
             if (!failed) {
               const detailsTodos = (result?.details as Record<string, unknown> | undefined)?.todos;
               const todos = normalizeTodoItems(Array.isArray(detailsTodos) ? detailsTodos : stowed);
-              if (todos) {
-                emitOn(callbacks.events, Events.TODOS_UPDATE, { source: subagentSource, todos });
-              }
+              if (todos) emitOn(callbacks.events, Events.TODOS_UPDATE, { source: subagentSource, todos });
             }
+          }
+          const toolCallId = typeof event.toolCallId === "string" && event.toolCallId
+            ? event.toolCallId
+            : undefined;
+          const toolCallKey = repeatedErrorTracking && toolCallId
+            ? fingerprint(toolCallId)
+            : undefined;
+          const pending = toolCallKey ? toolFingerprints.get(toolCallKey) : undefined;
+          if (toolCallKey && pending === null) {
+            toolFingerprints.delete(toolCallKey);
+          } else if (
+            toolCallKey &&
+            pending &&
+            typeof event.toolName === "string" &&
+            event.toolName &&
+            pending.toolName === fingerprint(event.toolName) &&
+            event.result !== undefined &&
+            typeof event.isError === "boolean"
+          ) {
+            toolFingerprints.delete(toolCallKey);
+            if (pending.call) observeToolResult(pending.call, event.result, event.isError);
+            else resetRepeatedErrorStreak();
           }
           handleToolEnd(state);
           emitProgress();
@@ -196,6 +526,17 @@ export function streamEvents(
         }
         case "turn_start": {
           state.turnCount++;
+          state.turnUsage = readUsage(undefined);
+          state.partialUsage = readUsage(undefined);
+          break;
+        }
+        case "message_start": {
+          handleMessageStart(state, event);
+          emitProgress();
+          break;
+        }
+        case "message_update": {
+          if (handleMessageUpdate(state, event)) emitProgress();
           break;
         }
         case "message_end": {
@@ -208,66 +549,76 @@ export function streamEvents(
           break;
         }
         case "agent_settled": {
-          // pi 1.1.0: the child's own statement that its run is over, and
-          // whether it was cancelled. `agent_end` fires for a cancelled run too
-          // (and can fire while a continuation is still pending), so this — not
-          // `agent_end` — is what an outcome is read from.
           if (event.aborted === true) state.settledAborted = true;
           break;
         }
-        // Ignore: agent_start, message_start, message_update, turn_end, tool_execution_update
+        // Valid activity with no local state mutation: agent_start, turn_end, tool_execution_update.
       }
     });
 
     // Handle process exit
     child.on("close", (code, signal) => {
+      settle();
       clearStartupTimer();
       clearInterval(heartbeat);
       const durationMs = Date.now() - startTime;
-      const exitCode = code ?? 1;
+      const processExitCode = code ?? 1;
+      const usage = observedUsage();
 
-      const outcome = decideRunOutcome({
+      // Explicit managed stops remain failures with their first-stop evidence.
+      // Otherwise retain native completed/truncated/aborted outcomes; a natural
+      // output truncation is not a crash, even when print mode exits nonzero.
+      let outcome = termination ? "failed" : decideRunOutcome({
         settledAborted: state.settledAborted === true,
         stopReason: state.lastStopReason,
-        // The raw code, not `exitCode`: `null` is the difference between "it was
-        // killed" and "it failed", and the outcome table reads that difference.
         exitCode: code,
         signal: signal ?? undefined,
       });
-
-      // stderr explains a failure and nothing else. A truncated run's stderr is
-      // pi's own "Response was truncated" notice and an aborted one's is noise —
-      // promoting either to `error` would report a real answer as a broken one.
-      if (outcome === "failed" && !error) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-        if (stderr) error = stderr;
-        else if (code === null) error = `subagent terminated by ${signal ?? "a signal"}`;
-        // A json child that errored leaves nothing behind to read: the exit code
-        // stays 0 (the stopReason→code mapping is print mode's text branch) and
-        // stderr is clean, which used to make a failed run byte-identical to a
-        // successful one at this boundary. A failed run always says why.
-        else if (state.lastStopReason === "error")
-          error = 'subagent failed: the child\u2019s last response ended with stopReason "error"';
-        else error = `subagent failed with exit code ${code ?? "null"}`;
+      if (callbacks.execution && !termination && (outcome === "truncated" || outcome === "aborted")) {
+        termination = {
+          reason: outcome === "truncated" ? "output-limit" : "user-abort",
+          usageState: outcome === "truncated" ? "complete" : "partial",
+        };
+        error = `Subagent stopped: ${termination.reason}`;
+        outcome = "failed";
       }
+      if (outcome === "failed" && !error) {
+        const stderr = stderrLines.join("\n").trim();
+        error = stderr || state.error || (code === null
+          ? `subagent terminated by ${signal ?? "a signal"}`
+          : `subagent failed with exit code ${code}`);
+      }
+      const exitCode = termination ? 2 : state.error ? 1 : processExitCode;
+      termination ??= outcome === "failed"
+        ? { reason: "process-error", usageState: state.streamingOutput ? "partial" : "unknown" }
+        : outcome === "aborted"
+          ? { reason: "user-abort", usageState: "partial" }
+          : outcome === "truncated"
+            ? { reason: "output-limit", usageState: "complete" }
+            : { reason: "completed", usageState: "complete" };
 
       const result: SubagentResult = {
         agent: callbacks.agent ?? "subagent",
         task: callbacks.task ?? "",
-        ...(state.childSessionId ? { childSessionId: state.childSessionId } : {}),
+        ...(state.childSessionId ? {
+          childSessionId: state.childSessionId,
+          childTrace: { sessionId: state.childSessionId },
+        } : {}),
         exitCode,
         ...(outcome === "failed" ? {} : { outcome }),
+        provider: state.provider,
         model: state.model,
-        usage: {
-          input: state.totalInput,
-          output: state.totalOutput,
-          cacheRead: state.totalCacheRead,
-          cacheWrite: state.totalCacheWrite,
-          cost: state.totalCost,
-          turns: state.turnCount,
-        },
-        finalOutput: state.finalOutput,
+        ...(callbacks.execution ? {
+          execution: {
+            profile: { ...callbacks.execution.profile },
+            limits: callbacks.execution.limits ? { ...callbacks.execution.limits } : undefined,
+            ...(state.outputLimit ? { outputLimit: { ...state.outputLimit } } : {}),
+          },
+        } : {}),
+        usage: toSubagentUsage(usage, state.turnCount),
+        finalOutput: state.finalOutput ?? observedOutput(),
         error,
+        termination,
         progress: {
           ...buildProgress(),
           status: outcome === "failed" ? "failed" : "completed",
@@ -276,22 +627,21 @@ export function streamEvents(
         },
         progressSummary: {
           toolCount: state.toolCount,
-          tokens: state.totalInput + state.totalOutput,
+          tokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
           durationMs,
         },
       };
 
       callbacks.onProgress?.(result.progress!);
 
-      // Clear subagent todos from the handle on exit
-      emitOn(callbacks.events, Events.TODOS_CLEAR, {
-        source: subagentSource,
-      });
+      // Subscribers register before execution; deferred stale-handle emits are safe.
+      emitOn(callbacks.events, Events.TODOS_CLEAR, { source: subagentSource });
 
       resolve(result);
     });
 
     child.on("error", (err) => {
+      settle();
       clearStartupTimer();
       clearInterval(heartbeat);
       reject(err);

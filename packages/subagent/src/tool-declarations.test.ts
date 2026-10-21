@@ -1,23 +1,6 @@
-/**
- * Task 11 item 3 — `subagent` is for the model, not for scripts, and
- * `list_agents` stays reachable both ways.
- *
- * `exposure: "model-only"` is measured, not assumed (see the same file in
- * `ask` for the method and the pi source references). For `subagent` the cost is
- * concrete and it was observed before the change: a codemode script called
- * `tools.subagent({ task: "Reply with exactly the single word: child" })` and
- * got the whole run back as a structured value —
- * `{"mode":"single","results":[{... "outcome":"completed","finalOutput":"child" ...}]}`.
- * After the change that same script line reports
- * `tools.subagent does not exist` and `subagent` is absent from `ALL_TOOLS`.
- *
- * The plan takes the exposure anyway (`docs/roadmap/pi-1-x-alignment.md`,
- * Task 11 item 3): a subagent dispatch is an orchestration step that pi's own
- * docs file under "Use it for orchestrating or interactive tools", the model
- * still drives it, and the nested-call path it does remove is one where the
- * child's row renders inside a script row the user cannot expand. Say so to the
- * maintainer rather than discover it later.
- */
+/** Managed pi-setup preserves script-callable delegation. Upstream 2.11.1's
+ * model-only exposure would remove tools.subagent from existing codemode callers.
+ * Child recursion remains separately blocked by registration and spawn guards. */
 
 import { describe, it, expect, vi } from "vitest";
 import { registerSubagent } from "./index.js";
@@ -36,8 +19,8 @@ function register(): Record<string, RegisteredTool> {
 }
 
 describe("subagent exposure", () => {
-  it("subagent is model-only: declared to the model, never callable from a script", () => {
-    expect(register().subagent!.exposure).toBe("model-only");
+  it("subagent remains direct for existing model and script callers", () => {
+    expect(register().subagent!.exposure).toBe("direct");
   });
 
   it("list_agents stays direct — a script that dispatches nothing still reads the catalogue", () => {

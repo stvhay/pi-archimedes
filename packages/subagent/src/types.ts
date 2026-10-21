@@ -1,11 +1,92 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
+export const MAX_SUBAGENT_DURATION_MS = 2_147_483_647;
+
+export const SUBAGENT_OUTPUT_CONTRACTS = [
+  "inline",
+  "artifact",
+  "status-only",
+  "pass-no-findings",
+] as const;
+export type SubagentOutputContract = (typeof SUBAGENT_OUTPUT_CONTRACTS)[number];
+
+export const SUBAGENT_EXECUTION_MODES = ["agentic", "one-shot"] as const;
+export type SubagentExecutionMode = (typeof SUBAGENT_EXECUTION_MODES)[number];
+
+export const SUBAGENT_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
+
+export interface SubagentLimits {
+  maxProviderRequests?: number;
+  maxToolCalls?: number;
+  maxTotalTokens?: number;
+  /** Provider-native output cap accepted only for one-shot children. */
+  maxOutputTokens?: number;
+  maxCostUsd?: number;
+  /** Absolute child wall-time ceiling. */
+  maxDurationMs?: number;
+  /** Sliding ceiling between valid child activity events. */
+  maxIdleMs?: number;
+}
+
+export interface SubagentExecutionProfile {
+  mode: SubagentExecutionMode;
+  thinking?: string | undefined;
+}
+
+export interface OutputLimitEvidence {
+  requested: number;
+  /** Exact provider payload ceiling after clamping; absent when enforcement is unsupported. */
+  effective?: number;
+  enforcement: "applied" | "unsupported";
+}
+
+export interface ResolvedChildExecution {
+  profile: SubagentExecutionProfile;
+  limits?: SubagentLimits | undefined;
+  outputLimit?: OutputLimitEvidence;
+}
+
+export const SUBAGENT_TERMINATION_REASONS = [
+  "completed",
+  "user-abort",
+  "request-limit",
+  "tool-limit",
+  "token-limit",
+  "output-limit",
+  "cost-limit",
+  "time-limit",
+  "idle-limit",
+  "usage-unknown",
+  "repeated-error",
+  "process-error",
+] as const;
+export type SubagentTerminationReason = (typeof SUBAGENT_TERMINATION_REASONS)[number];
+
+export const SUBAGENT_USAGE_STATES = ["complete", "partial", "unknown"] as const;
+export type SubagentUsageState = (typeof SUBAGENT_USAGE_STATES)[number];
+
+export interface SubagentTermination {
+  reason: SubagentTerminationReason;
+  limit?: number;
+  observed?: number;
+  usageState: SubagentUsageState;
+}
+
 export interface SubagentUsage {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  costBreakdown?: Usage["cost"];
   turns: number;
 }
 
@@ -41,6 +122,10 @@ export interface SubagentProgress {
   currentToolArgs: string | undefined;
   currentToolStartedAt: number | undefined;
   toolCount: number;
+  turnCount?: number;
+  turnTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   inputTokens: number;
   outputTokens: number;
   tokens: number;
@@ -57,11 +142,27 @@ export interface SubagentProgress {
   toolCalls: SubagentToolCall[] | undefined;
 }
 
+export interface SubagentChildTraceRef {
+  sessionId: string;
+  traceId?: string;
+}
+
+export interface SubagentProgressSummary {
+  toolCount: number;
+  tokens: number;
+  durationMs: number;
+}
+
 export interface SubagentResult {
   agent: string;
   task: string;
   /** Logical Pi session UUID for this spawned subagent process. */
   childSessionId?: string;
+  childTrace?: SubagentChildTraceRef;
+  provider?: string | undefined;
+  execution?: ResolvedChildExecution;
+  outputContract?: SubagentOutputContract;
+  termination?: SubagentTermination;
   exitCode: number;
   /**
    * How the run ended, when it ended. Absent when the run **failed** (an error
@@ -86,11 +187,11 @@ export interface SubagentResult {
    * that reports nothing to anyone: the tool result is the only cost report.
    */
   usageAccountedElsewhere?: boolean;
-  model: string | undefined;
-  finalOutput: string | undefined;
-  error: string | undefined;
-  progress: SubagentProgress | undefined;
-  progressSummary: { toolCount: number; tokens: number; durationMs: number } | undefined;
+  model?: string | undefined;
+  finalOutput?: string | undefined;
+  error?: string | undefined;
+  progress?: SubagentProgress | undefined;
+  progressSummary?: SubagentProgressSummary | undefined;
 }
 
 export interface SubagentToolResult {
@@ -126,46 +227,36 @@ export interface SubagentToolResult {
  * The machine-readable report for one run — `SubagentResult` without the live
  * progress blob (see `subagentStructuredContent()` in `tool-schema.ts`).
  */
-export type SubagentRunReport = {
-  agent: string;
-  task: string;
-  exitCode: number;
-  childSessionId?: string;
-  outcome?: RunOutcome;
-  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
-  model?: string;
-  finalOutput?: string;
-  error?: string;
-  progressSummary?: { toolCount: number; tokens: number; durationMs: number };
-};
+// Derive the JSON report from its schema so public types and script values agree.
+export type SubagentRunReport = import("typebox").Static<typeof import("./tool-schema.js").RunReportSchema>;
 
 export interface SubagentDetails {
   mode: "single" | "parallel";
   results: SubagentResult[];
-  progress: SubagentProgress[] | undefined;
+  progress?: SubagentProgress[] | undefined;
 }
 
 /** Mutable state during streaming — shared between stream.ts and handlers.ts */
 export interface StreamState {
   childSessionId?: string;
+  lastStopReason?: string;
+  settledAborted?: boolean;
   toolCount: number;
   turnCount: number;
-  totalInput: number;
-  totalOutput: number;
-  totalCacheRead: number;
-  totalCacheWrite: number;
-  totalCost: number;
-  /** `stopReason` of the last assistant message seen (`length` ⇒ truncated). */
-  lastStopReason?: string;
-  /** `agent_settled.aborted` — pi 1.1.0's own account of a cancelled run. */
-  settledAborted?: boolean;
+  usage: Usage;
+  turnUsage: Usage;
+  partialUsage: Usage;
   currentTool: string | undefined;
   currentToolArgs: string | undefined;
   currentToolStartedAt: number | undefined;
+  provider: string | undefined;
   model: string | undefined;
   accumulatedOutput: string[];
+  streamingOutput: string | undefined;
+  streamingParts: Map<number, { type: "text" | "thinking"; content: string }>;
+  outputLimit: OutputLimitEvidence | undefined;
   recentOutput: string[];
   toolCalls: SubagentToolCall[];
   finalOutput: string | undefined;
+  error?: string | undefined;
 }
-

@@ -102,6 +102,7 @@ export interface PromptDescriptor {
   kind: "text" | "number";
   label: string;
   min?: number;
+  allowDecimal?: boolean;
 }
 
 export interface SettingsManagerOptions {
@@ -305,8 +306,8 @@ export function createSettingsManager(opts: SettingsManagerOptions): {
     const commit = (): void => {
       const typed = field.getValue();
       if (descriptor.kind === "number") {
-        const n = parseInt(typed, 10);
-        if (!Number.isFinite(n) || n < (descriptor.min ?? 0)) {
+        const n = descriptor.allowDecimal ? Number(typed) : parseInt(typed, 10);
+        if (!typed.trim() || !Number.isFinite(n) || n < (descriptor.min ?? 0)) {
           error = `must be >= ${descriptor.min ?? 0}`;
           return; // stay in the field, exactly as before
         }
@@ -341,7 +342,9 @@ export function createSettingsManager(opts: SettingsManagerOptions): {
           // Digits only, as the field has always been: a keystroke that would
           // insert something else is swallowed before it reaches the field.
           const kitty = decodeKittyPrintable(data);
-          if (kitty !== undefined ? !/^\d$/.test(kitty) : isInsertChar(data) && !/\d/.test(data)) return;
+          const printable = kitty ?? data;
+          const decimalPoint = descriptor.allowDecimal && printable === "." && !field.getValue().includes(".");
+          if (!decimalPoint && (kitty !== undefined ? !/^\d$/.test(kitty) : isInsertChar(data) && !/\d/.test(data))) return;
           // …and no paste.
           if (data.includes("\x1b[200~")) return;
         }

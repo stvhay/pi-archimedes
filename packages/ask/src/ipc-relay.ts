@@ -91,11 +91,14 @@ async function handleAskRequest(
 	}
 
 	// Build results matching the request's questions
-	const results = questions.map((q, i) => ({
-		id: q.id,
-		selectedOptions: selections[i]?.selectedOptions ?? [],
-		customInput: selections[i]?.customInput,
-	}));
+	const results = questions.map((q, i) => {
+		const customInput = selections[i]?.customInput;
+		return {
+			id: q.id,
+			selectedOptions: selections[i]?.selectedOptions ?? [],
+			...(customInput !== undefined ? { customInput } : {}),
+		};
+	});
 
 	// Emit on the handle — the parent's streamEvents writes it to the child socket
 	emitOn(events, Events.ASK_RESPONSE, {

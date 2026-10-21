@@ -13,6 +13,10 @@ An extra pair of eyes on your code. Agents working in parallel. A terminal that 
 
 ---
 
+## Managed vendor line
+
+This local vendor line ports pi-setup's execution limits, isolation, result evidence and keyed footer onto upstream 2.11.1. It uses native host events and native tool-result usage, not the retired bus/cost accumulator. Progress shows live child cost; footer totals update after result persistence. See the [retained/retired contract inventory](docs/plans/done/2026-10-21-pi-setup-vendor-port.md). Local verification does not imply publication or deployment.
+
 ## Setup
 
 ### You already use Pi
